@@ -23,6 +23,10 @@ helm install node-local-cache oci://ghcr.io/kapernikov/charts/node-local-cache \
   --create-namespace
 ```
 
+## Status
+
+The current status should be seen as a mostly vibecoded first version. Not recommended for production use yet. We will update this document as it matures.
+
 ## License
 
 Apache 2.0
