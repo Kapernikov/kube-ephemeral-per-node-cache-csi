@@ -4,6 +4,8 @@ use tokio::net::UnixStream;
 use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
 
+#[allow(clippy::doc_overindented_list_items)]
+#[allow(clippy::doc_lazy_continuation)]
 mod csi {
     tonic::include_proto!("csi.v1");
 }
