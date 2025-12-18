@@ -2,11 +2,9 @@ use tonic::{Request, Response, Status};
 use tracing::info;
 
 use crate::csi::{
-    identity_server::Identity,
-    GetPluginCapabilitiesRequest, GetPluginCapabilitiesResponse,
-    GetPluginInfoRequest, GetPluginInfoResponse,
+    identity_server::Identity, plugin_capability, GetPluginCapabilitiesRequest,
+    GetPluginCapabilitiesResponse, GetPluginInfoRequest, GetPluginInfoResponse, PluginCapability,
     ProbeRequest, ProbeResponse,
-    PluginCapability, plugin_capability,
 };
 
 pub const DRIVER_NAME: &str = "node-local-cache.csi.io";
@@ -41,17 +39,17 @@ impl Identity for IdentityService {
     ) -> Result<Response<GetPluginCapabilitiesResponse>, Status> {
         info!("GetPluginCapabilities called");
 
-        let capabilities = vec![
-            PluginCapability {
-                r#type: Some(plugin_capability::Type::Service(
-                    plugin_capability::Service {
-                        r#type: plugin_capability::service::Type::ControllerService as i32,
-                    },
-                )),
-            },
-        ];
+        let capabilities = vec![PluginCapability {
+            r#type: Some(plugin_capability::Type::Service(
+                plugin_capability::Service {
+                    r#type: plugin_capability::service::Type::ControllerService as i32,
+                },
+            )),
+        }];
 
-        Ok(Response::new(GetPluginCapabilitiesResponse { capabilities }))
+        Ok(Response::new(GetPluginCapabilitiesResponse {
+            capabilities,
+        }))
     }
 
     async fn probe(
@@ -59,8 +57,6 @@ impl Identity for IdentityService {
         _request: Request<ProbeRequest>,
     ) -> Result<Response<ProbeResponse>, Status> {
         // Always ready
-        Ok(Response::new(ProbeResponse {
-            ready: Some(true),
-        }))
+        Ok(Response::new(ProbeResponse { ready: Some(true) }))
     }
 }

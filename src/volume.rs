@@ -26,10 +26,10 @@ pub fn volume_path(base: &Path, volume_id: &str) -> PathBuf {
 }
 
 /// Check if a path is a mount point by reading /proc/mounts
+#[allow(clippy::result_large_err)]
 pub fn is_mounted(path: &Path) -> Result<bool, Status> {
-    let mounts = std::fs::read_to_string("/proc/mounts").map_err(|e| {
-        Status::internal(format!("Failed to read /proc/mounts: {}", e))
-    })?;
+    let mounts = std::fs::read_to_string("/proc/mounts")
+        .map_err(|e| Status::internal(format!("Failed to read /proc/mounts: {}", e)))?;
 
     let path_str = path.to_string_lossy();
 
@@ -57,12 +57,16 @@ mod tests {
     #[test]
     fn test_validate_volume_id() {
         // Valid IDs
-        assert!(validate_volume_id("nlc-550e8400-e29b-41d4-a716-446655440000"));
+        assert!(validate_volume_id(
+            "nlc-550e8400-e29b-41d4-a716-446655440000"
+        ));
         assert!(validate_volume_id(&generate_volume_id()));
 
         // Invalid IDs
         assert!(!validate_volume_id("invalid"));
-        assert!(!validate_volume_id("cv-550e8400-e29b-41d4-a716-446655440000")); // wrong prefix
+        assert!(!validate_volume_id(
+            "cv-550e8400-e29b-41d4-a716-446655440000"
+        )); // wrong prefix
         assert!(!validate_volume_id("nlc-not-a-uuid"));
         assert!(!validate_volume_id(""));
     }

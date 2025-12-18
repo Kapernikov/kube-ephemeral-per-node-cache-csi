@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(mkdir:*)",
+      "Bash(cargo --version:*)",
+      "Bash(curl:*)",
+      "Bash(cargo build:*)",
+      "Bash(sudo apt-get install:*)",
+      "Bash(PROTOC=./tools/bin/protoc cargo build:*)",
+      "Bash(find:*)",
+      "Bash(*)",
+      "Bash(grep:*)",
+      "Bash(cargo test:*)",
+      "Bash(git init:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nInitial commit: node-local-cache CSI driver scaffolding\n\n- Project structure with Cargo.toml, build.rs for protobuf generation\n- CSI proto file \\(v1.9.0\\)\n- Identity, Controller, and Node service implementations\n- Volume ID generation and path utilities\n- Design specification and implementation plan docs\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(./target/debug/node-local-cache:*)",
+      "Bash(PROTOC=./tools/bin/protoc cargo test:*)",
+      "Bash(helm lint:*)",
+      "Bash(PROTOC=./tools/bin/protoc cargo generate-lockfile:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nAdd Helm chart, Dockerfile, CI/CD, and integration tests\n\n- Helm chart with controller deployment and node daemonset\n- Two storage classes: node-local-cache-delete and node-local-cache-retain\n- Dockerfile with multi-stage build \\(alpine-based\\)\n- GitHub Actions: CI \\(test, lint, build\\) and Release \\(push to GHCR\\)\n- Integration tests for Identity and Controller services\n- Kind cluster config for local testing\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(chmod:*)",
+      "Bash(git commit:*)",
+      "Bash(./hack/smoke-test-kind.sh:*)",
+      "Bash(kind get:*)",
+      "Bash(__NEW_LINE__ echo)",
+      "Bash(docker logs:*)"
+    ]
+  }
+}

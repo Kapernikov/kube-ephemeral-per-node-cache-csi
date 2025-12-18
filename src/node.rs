@@ -1,18 +1,14 @@
 use std::path::PathBuf;
 use tonic::{Request, Response, Status};
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 use crate::csi::{
-    node_server::Node,
-    NodeGetCapabilitiesRequest, NodeGetCapabilitiesResponse,
-    NodeGetInfoRequest, NodeGetInfoResponse,
-    NodePublishVolumeRequest, NodePublishVolumeResponse,
-    NodeUnpublishVolumeRequest, NodeUnpublishVolumeResponse,
-    NodeStageVolumeRequest, NodeStageVolumeResponse,
-    NodeUnstageVolumeRequest, NodeUnstageVolumeResponse,
-    NodeGetVolumeStatsRequest, NodeGetVolumeStatsResponse,
-    NodeExpandVolumeRequest, NodeExpandVolumeResponse,
-    NodeServiceCapability,
+    node_server::Node, NodeExpandVolumeRequest, NodeExpandVolumeResponse,
+    NodeGetCapabilitiesRequest, NodeGetCapabilitiesResponse, NodeGetInfoRequest,
+    NodeGetInfoResponse, NodeGetVolumeStatsRequest, NodeGetVolumeStatsResponse,
+    NodePublishVolumeRequest, NodePublishVolumeResponse, NodeServiceCapability,
+    NodeStageVolumeRequest, NodeStageVolumeResponse, NodeUnpublishVolumeRequest,
+    NodeUnpublishVolumeResponse, NodeUnstageVolumeRequest, NodeUnstageVolumeResponse,
 };
 
 use crate::volume;
@@ -24,7 +20,10 @@ pub struct NodeService {
 
 impl NodeService {
     pub fn new(node_name: String, base_path: PathBuf) -> Self {
-        Self { node_name, base_path }
+        Self {
+            node_name,
+            base_path,
+        }
     }
 }
 

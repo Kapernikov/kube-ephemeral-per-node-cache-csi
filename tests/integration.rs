@@ -8,9 +8,9 @@ mod csi {
     tonic::include_proto!("csi.v1");
 }
 
-use csi::identity_client::IdentityClient;
 use csi::controller_client::ControllerClient;
-use csi::{GetPluginInfoRequest, CreateVolumeRequest, DeleteVolumeRequest, CapacityRange};
+use csi::identity_client::IdentityClient;
+use csi::{CapacityRange, CreateVolumeRequest, DeleteVolumeRequest, GetPluginInfoRequest};
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -34,9 +34,12 @@ impl TestServer {
         let _ = std::fs::remove_file(&socket);
 
         let mut cmd = Command::new("./target/debug/node-local-cache");
-        cmd.arg("--mode").arg(mode)
-            .arg("--csi-socket").arg(&socket)
-            .arg("--log-level").arg("warn");
+        cmd.arg("--mode")
+            .arg(mode)
+            .arg("--csi-socket")
+            .arg(&socket)
+            .arg("--log-level")
+            .arg("warn");
 
         if mode == "node" {
             cmd.arg("--node-name").arg("test-node");
@@ -77,7 +80,7 @@ async fn connect_to_socket(socket: &str) -> Channel {
             let path = socket_path.clone();
             async move {
                 Ok::<_, std::io::Error>(hyper_util::rt::TokioIo::new(
-                    UnixStream::connect(path).await?
+                    UnixStream::connect(path).await?,
                 ))
             }
         }))
@@ -99,7 +102,10 @@ async fn test_identity_get_plugin_info() {
     let info = response.into_inner();
     assert_eq!(info.name, "node-local-cache.csi.io");
     assert!(!info.vendor_version.is_empty());
-    println!("✓ Identity: name={}, version={}", info.name, info.vendor_version);
+    println!(
+        "✓ Identity: name={}, version={}",
+        info.name, info.vendor_version
+    );
 }
 
 #[tokio::test]
@@ -143,11 +149,20 @@ async fn test_controller_create_delete_volume() {
         .await
         .expect("CreateVolume failed");
 
-    let volume = create_response.into_inner().volume.expect("No volume in response");
+    let volume = create_response
+        .into_inner()
+        .volume
+        .expect("No volume in response");
     assert!(volume.volume_id.starts_with("nlc-"));
     assert_eq!(volume.capacity_bytes, 1024 * 1024 * 100);
-    assert!(volume.accessible_topology.is_empty(), "Should have no topology constraints");
-    println!("✓ CreateVolume: id={}, capacity={}", volume.volume_id, volume.capacity_bytes);
+    assert!(
+        volume.accessible_topology.is_empty(),
+        "Should have no topology constraints"
+    );
+    println!(
+        "✓ CreateVolume: id={}, capacity={}",
+        volume.volume_id, volume.capacity_bytes
+    );
 
     // Delete volume
     let delete_response = client

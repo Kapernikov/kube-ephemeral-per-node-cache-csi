@@ -3,12 +3,14 @@ use std::path::PathBuf;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
-mod identity;
+mod cleanup;
 mod controller;
+mod identity;
 mod node;
 mod volume;
-mod cleanup;
 
+#[allow(clippy::doc_overindented_list_items)]
+#[allow(clippy::doc_lazy_continuation)]
 pub mod csi {
     tonic::include_proto!("csi.v1");
 }
@@ -70,7 +72,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             run_controller(&args).await?;
         }
         Mode::Node => {
-            let node_name = args.node_name.clone().ok_or("--node-name is required in node mode")?;
+            let node_name = args
+                .node_name
+                .clone()
+                .ok_or("--node-name is required in node mode")?;
             info!(node = %node_name, "Running in node mode");
             run_node(&args, &node_name).await?;
         }
@@ -80,9 +85,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn run_controller(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
-    use tonic::transport::Server;
-    use csi::identity_server::IdentityServer;
     use csi::controller_server::ControllerServer;
+    use csi::identity_server::IdentityServer;
+    use tonic::transport::Server;
 
     let identity_service = identity::IdentityService::new();
 
@@ -123,10 +128,10 @@ async fn run_controller(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn run_node(args: &Args, node_name: &str) -> Result<(), Box<dyn std::error::Error>> {
-    use std::time::Duration;
-    use tonic::transport::Server;
     use csi::identity_server::IdentityServer;
     use csi::node_server::NodeServer;
+    use std::time::Duration;
+    use tonic::transport::Server;
 
     let identity_service = identity::IdentityService::new();
     let node_service = node::NodeService::new(node_name.to_string(), args.base_path.clone());

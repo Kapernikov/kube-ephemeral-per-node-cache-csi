@@ -5,23 +5,16 @@ use tracing::{info, warn};
 
 use crate::cleanup::CleanupController;
 use crate::csi::{
-    controller_server::Controller,
-    ControllerGetCapabilitiesRequest, ControllerGetCapabilitiesResponse,
-    ControllerPublishVolumeRequest, ControllerPublishVolumeResponse,
-    ControllerUnpublishVolumeRequest, ControllerUnpublishVolumeResponse,
-    CreateSnapshotRequest, CreateSnapshotResponse,
-    CreateVolumeRequest, CreateVolumeResponse,
-    DeleteSnapshotRequest, DeleteSnapshotResponse,
-    DeleteVolumeRequest, DeleteVolumeResponse,
-    GetCapacityRequest, GetCapacityResponse,
-    ListSnapshotsRequest, ListSnapshotsResponse,
-    ListVolumesRequest, ListVolumesResponse,
-    ValidateVolumeCapabilitiesRequest, ValidateVolumeCapabilitiesResponse,
-    ControllerExpandVolumeRequest, ControllerExpandVolumeResponse,
-    ControllerGetVolumeRequest, ControllerGetVolumeResponse,
-    ControllerModifyVolumeRequest, ControllerModifyVolumeResponse,
-    ControllerServiceCapability, controller_service_capability,
-    Volume,
+    controller_server::Controller, controller_service_capability, ControllerExpandVolumeRequest,
+    ControllerExpandVolumeResponse, ControllerGetCapabilitiesRequest,
+    ControllerGetCapabilitiesResponse, ControllerGetVolumeRequest, ControllerGetVolumeResponse,
+    ControllerModifyVolumeRequest, ControllerModifyVolumeResponse, ControllerPublishVolumeRequest,
+    ControllerPublishVolumeResponse, ControllerServiceCapability, ControllerUnpublishVolumeRequest,
+    ControllerUnpublishVolumeResponse, CreateSnapshotRequest, CreateSnapshotResponse,
+    CreateVolumeRequest, CreateVolumeResponse, DeleteSnapshotRequest, DeleteSnapshotResponse,
+    DeleteVolumeRequest, DeleteVolumeResponse, GetCapacityRequest, GetCapacityResponse,
+    ListSnapshotsRequest, ListSnapshotsResponse, ListVolumesRequest, ListVolumesResponse,
+    ValidateVolumeCapabilitiesRequest, ValidateVolumeCapabilitiesResponse, Volume,
 };
 
 use crate::volume;
@@ -100,15 +93,13 @@ impl Controller for ControllerService {
     ) -> Result<Response<ControllerGetCapabilitiesResponse>, Status> {
         info!("ControllerGetCapabilities called");
 
-        let capabilities = vec![
-            ControllerServiceCapability {
-                r#type: Some(controller_service_capability::Type::Rpc(
-                    controller_service_capability::Rpc {
-                        r#type: controller_service_capability::rpc::Type::CreateDeleteVolume as i32,
-                    },
-                )),
-            },
-        ];
+        let capabilities = vec![ControllerServiceCapability {
+            r#type: Some(controller_service_capability::Type::Rpc(
+                controller_service_capability::Rpc {
+                    r#type: controller_service_capability::rpc::Type::CreateDeleteVolume as i32,
+                },
+            )),
+        }];
 
         Ok(Response::new(ControllerGetCapabilitiesResponse {
             capabilities,
@@ -124,12 +115,14 @@ impl Controller for ControllerService {
 
         // We support all requested capabilities (single-node read/write)
         Ok(Response::new(ValidateVolumeCapabilitiesResponse {
-            confirmed: Some(crate::csi::validate_volume_capabilities_response::Confirmed {
-                volume_context: req.volume_context,
-                volume_capabilities: req.volume_capabilities,
-                parameters: req.parameters,
-                mutable_parameters: Default::default(),
-            }),
+            confirmed: Some(
+                crate::csi::validate_volume_capabilities_response::Confirmed {
+                    volume_context: req.volume_context,
+                    volume_capabilities: req.volume_capabilities,
+                    parameters: req.parameters,
+                    mutable_parameters: Default::default(),
+                },
+            ),
             message: String::new(),
         }))
     }
@@ -140,14 +133,18 @@ impl Controller for ControllerService {
         &self,
         _request: Request<ControllerPublishVolumeRequest>,
     ) -> Result<Response<ControllerPublishVolumeResponse>, Status> {
-        Err(Status::unimplemented("ControllerPublishVolume not supported"))
+        Err(Status::unimplemented(
+            "ControllerPublishVolume not supported",
+        ))
     }
 
     async fn controller_unpublish_volume(
         &self,
         _request: Request<ControllerUnpublishVolumeRequest>,
     ) -> Result<Response<ControllerUnpublishVolumeResponse>, Status> {
-        Err(Status::unimplemented("ControllerUnpublishVolume not supported"))
+        Err(Status::unimplemented(
+            "ControllerUnpublishVolume not supported",
+        ))
     }
 
     async fn list_volumes(
@@ -189,7 +186,9 @@ impl Controller for ControllerService {
         &self,
         _request: Request<ControllerExpandVolumeRequest>,
     ) -> Result<Response<ControllerExpandVolumeResponse>, Status> {
-        Err(Status::unimplemented("ControllerExpandVolume not supported"))
+        Err(Status::unimplemented(
+            "ControllerExpandVolume not supported",
+        ))
     }
 
     async fn controller_get_volume(
@@ -203,6 +202,8 @@ impl Controller for ControllerService {
         &self,
         _request: Request<ControllerModifyVolumeRequest>,
     ) -> Result<Response<ControllerModifyVolumeResponse>, Status> {
-        Err(Status::unimplemented("ControllerModifyVolume not supported"))
+        Err(Status::unimplemented(
+            "ControllerModifyVolume not supported",
+        ))
     }
 }

@@ -125,10 +125,7 @@ impl CleanupController {
         let configmaps: Api<ConfigMap> = Api::namespaced(self.client.clone(), &self.namespace);
         let cm_name = format!("{}{}", CLEANUP_PREFIX, volume_id);
 
-        match configmaps
-            .delete(&cm_name, &Default::default())
-            .await
-        {
+        match configmaps.delete(&cm_name, &Default::default()).await {
             Ok(_) => {
                 info!(volume_id = %volume_id, "Deleted cleanup request");
                 Ok(())
