@@ -11,7 +11,7 @@ env:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: pepibru
     steps:
       - uses: actions/checkout@v4
 
@@ -45,7 +45,7 @@ jobs:
         run: cargo fmt -- --check
 
   helm-lint:
-    runs-on: ubuntu-latest
+    runs-on: pepibru
     steps:
       - uses: actions/checkout@v4
 
