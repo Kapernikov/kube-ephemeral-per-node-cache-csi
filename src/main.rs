@@ -52,6 +52,10 @@ struct Args {
     /// Disable cleanup service (for testing only - will leak disk space)
     #[arg(long, default_value = "false")]
     no_cleanup_service: bool,
+
+    /// Timeout for cleanup operations in seconds (for dead nodes)
+    #[arg(long, default_value = "3600")]
+    cleanup_timeout_secs: u64,
 }
 
 #[tokio::main]
@@ -98,7 +102,9 @@ async fn run_controller(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
 
     // Create kube client for cleanup coordination
     let controller_service = if args.no_cleanup_service {
-        tracing::warn!("Cleanup service disabled via --no-cleanup-service flag. This will leak disk space!");
+        tracing::warn!(
+            "Cleanup service disabled via --no-cleanup-service flag. This will leak disk space!"
+        );
         controller::ControllerService::new()
     } else {
         let client = kube::Client::try_default().await.map_err(|e| {
@@ -112,12 +118,17 @@ async fn run_controller(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         info!(namespace = %args.namespace, "Kubernetes client initialized, cleanup enabled");
 
         // Start cleanup pruner in background
-        // Prune ConfigMaps older than 5 minutes, check every minute
+        // Check every minute, timeout configurable (default 1 hour)
+        let cleanup_timeout = Duration::from_secs(args.cleanup_timeout_secs);
+        info!(
+            timeout_secs = args.cleanup_timeout_secs,
+            "Cleanup timeout configured"
+        );
         tokio::spawn(cleanup::run_controller_prune_loop(
             client.clone(),
             args.namespace.clone(),
-            Duration::from_secs(60),  // check interval
-            Duration::from_secs(300), // TTL (5 minutes)
+            Duration::from_secs(60), // check interval
+            cleanup_timeout,
         ));
 
         let cleanup_ctrl = cleanup::CleanupController::new(client, args.namespace.clone());
@@ -154,11 +165,13 @@ async fn run_node(args: &Args, node_name: &str) -> Result<(), Box<dyn std::error
     use tonic::transport::Server;
 
     let identity_service = identity::IdentityService::new(false); // node mode
-    let node_service = node::NodeService::new(node_name.to_string(), args.base_path.clone());
 
-    // Start cleanup watcher in background
-    if args.no_cleanup_service {
-        tracing::warn!("Cleanup service disabled via --no-cleanup-service flag. This will leak disk space!");
+    // Create node service, optionally with cleanup tracking
+    let node_service = if args.no_cleanup_service {
+        tracing::warn!(
+            "Cleanup service disabled via --no-cleanup-service flag. This will leak disk space!"
+        );
+        node::NodeService::new(node_name.to_string(), args.base_path.clone())
     } else {
         let client = kube::Client::try_default().await.map_err(|e| {
             format!(
@@ -173,15 +186,20 @@ async fn run_node(args: &Args, node_name: &str) -> Result<(), Box<dyn std::error
             node = %node_name,
             "Starting cleanup watcher"
         );
+
+        // Start cleanup watcher in background (every 10 seconds)
         let cleanup_node = cleanup::CleanupNode::new(
-            client,
+            client.clone(),
             args.namespace.clone(),
             node_name.to_string(),
             args.base_path.clone(),
         );
-        // Run cleanup loop in background (every 10 seconds)
         tokio::spawn(cleanup_node.run_cleanup_loop(Duration::from_secs(10)));
-    }
+
+        // Create node service with cleanup tracking enabled
+        node::NodeService::new(node_name.to_string(), args.base_path.clone())
+            .with_cleanup(client, args.namespace.clone())
+    };
 
     // Remove existing socket if present
     let _ = std::fs::remove_file(&args.csi_socket);

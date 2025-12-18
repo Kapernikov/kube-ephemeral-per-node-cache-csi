@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing::{error, info, warn};
 
@@ -11,11 +12,19 @@ use crate::csi::{
     NodeUnpublishVolumeResponse, NodeUnstageVolumeRequest, NodeUnstageVolumeResponse,
 };
 
+use crate::cleanup;
 use crate::volume;
+
+/// Optional cleanup registration context
+pub struct CleanupContext {
+    pub client: kube::Client,
+    pub namespace: String,
+}
 
 pub struct NodeService {
     node_name: String,
     base_path: PathBuf,
+    cleanup_ctx: Option<Arc<CleanupContext>>,
 }
 
 impl NodeService {
@@ -23,7 +32,13 @@ impl NodeService {
         Self {
             node_name,
             base_path,
+            cleanup_ctx: None,
         }
+    }
+
+    pub fn with_cleanup(mut self, client: kube::Client, namespace: String) -> Self {
+        self.cleanup_ctx = Some(Arc::new(CleanupContext { client, namespace }));
+        self
     }
 }
 
@@ -138,6 +153,25 @@ impl Node for NodeService {
             target = %target_path.display(),
             "Volume mounted successfully"
         );
+
+        // Register this node as having the volume for cleanup tracking
+        if let Some(ctx) = &self.cleanup_ctx {
+            if let Err(e) = cleanup::register_node_publish(
+                &ctx.client,
+                &ctx.namespace,
+                volume_id,
+                &self.node_name,
+            )
+            .await
+            {
+                // Log but don't fail - cleanup tracking is best-effort
+                warn!(
+                    volume_id = %volume_id,
+                    error = %e,
+                    "Failed to register node for cleanup tracking"
+                );
+            }
+        }
 
         Ok(Response::new(NodePublishVolumeResponse {}))
     }
