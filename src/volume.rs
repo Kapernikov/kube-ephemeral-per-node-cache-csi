@@ -5,9 +5,17 @@ use uuid::Uuid;
 /// Volume ID prefix
 const VOLUME_ID_PREFIX: &str = "nlc-";
 
-/// Generate a new volume ID
-pub fn generate_volume_id() -> String {
-    format!("{}{}", VOLUME_ID_PREFIX, Uuid::new_v4())
+/// Namespace UUID for generating deterministic volume IDs (UUIDv5)
+/// This is a randomly generated UUID used as a namespace for our driver
+const VOLUME_ID_NAMESPACE: Uuid = Uuid::from_bytes([
+    0x6b, 0xa7, 0xb8, 0x10, 0x9d, 0xad, 0x11, 0xd1, 0x80, 0xb4, 0x00, 0xc0, 0x4f, 0xd4, 0x30, 0xc8,
+]);
+
+/// Generate a deterministic volume ID from a PVC name
+/// Uses UUIDv5 to ensure idempotency - same name always produces same ID
+pub fn generate_volume_id(name: &str) -> String {
+    let uuid = Uuid::new_v5(&VOLUME_ID_NAMESPACE, name.as_bytes());
+    format!("{}{}", VOLUME_ID_PREFIX, uuid)
 }
 
 /// Validate a volume ID format
@@ -49,9 +57,21 @@ mod tests {
 
     #[test]
     fn test_generate_volume_id() {
-        let id = generate_volume_id();
+        let id = generate_volume_id("pvc-12345");
         assert!(id.starts_with(VOLUME_ID_PREFIX));
         assert_eq!(id.len(), 4 + 36); // "nlc-" + UUID
+    }
+
+    #[test]
+    fn test_generate_volume_id_deterministic() {
+        // Same input should produce same output (idempotency)
+        let id1 = generate_volume_id("pvc-abc-123");
+        let id2 = generate_volume_id("pvc-abc-123");
+        assert_eq!(id1, id2);
+
+        // Different input should produce different output
+        let id3 = generate_volume_id("pvc-def-456");
+        assert_ne!(id1, id3);
     }
 
     #[test]
@@ -60,7 +80,7 @@ mod tests {
         assert!(validate_volume_id(
             "nlc-550e8400-e29b-41d4-a716-446655440000"
         ));
-        assert!(validate_volume_id(&generate_volume_id()));
+        assert!(validate_volume_id(&generate_volume_id("test-pvc")));
 
         // Invalid IDs
         assert!(!validate_volume_id("invalid"));

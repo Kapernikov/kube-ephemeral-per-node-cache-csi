@@ -10,11 +10,16 @@ use crate::csi::{
 pub const DRIVER_NAME: &str = "node-local-cache.csi.io";
 pub const DRIVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-pub struct IdentityService;
+pub struct IdentityService {
+    /// Whether this instance is running in controller mode (vs node mode)
+    is_controller: bool,
+}
 
 impl IdentityService {
-    pub fn new() -> Self {
-        Self
+    /// Create a new IdentityService
+    /// - `is_controller`: true if running in controller mode, false for node mode
+    pub fn new(is_controller: bool) -> Self {
+        Self { is_controller }
     }
 }
 
@@ -37,15 +42,21 @@ impl Identity for IdentityService {
         &self,
         _request: Request<GetPluginCapabilitiesRequest>,
     ) -> Result<Response<GetPluginCapabilitiesResponse>, Status> {
-        info!("GetPluginCapabilities called");
+        info!(is_controller = %self.is_controller, "GetPluginCapabilities called");
 
-        let capabilities = vec![PluginCapability {
-            r#type: Some(plugin_capability::Type::Service(
-                plugin_capability::Service {
-                    r#type: plugin_capability::service::Type::ControllerService as i32,
-                },
-            )),
-        }];
+        // Only advertise ControllerService when running in controller mode
+        let capabilities = if self.is_controller {
+            vec![PluginCapability {
+                r#type: Some(plugin_capability::Type::Service(
+                    plugin_capability::Service {
+                        r#type: plugin_capability::service::Type::ControllerService as i32,
+                    },
+                )),
+            }]
+        } else {
+            // Node mode - no controller capabilities
+            vec![]
+        };
 
         Ok(Response::new(GetPluginCapabilitiesResponse {
             capabilities,

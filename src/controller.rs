@@ -44,7 +44,9 @@ impl Controller for ControllerService {
         let req = request.into_inner();
         info!(name = %req.name, "CreateVolume called");
 
-        let volume_id = volume::generate_volume_id();
+        // Generate deterministic volume ID from request name (which is pvc-<uid> from external-provisioner)
+        // This ensures idempotency - retries produce the same volume ID
+        let volume_id = volume::generate_volume_id(&req.name);
         let capacity_bytes = req
             .capacity_range
             .as_ref()
@@ -113,7 +115,29 @@ impl Controller for ControllerService {
         let req = request.into_inner();
         info!(volume_id = %req.volume_id, "ValidateVolumeCapabilities called");
 
-        // We support all requested capabilities (single-node read/write)
+        // Validate each capability - we only support filesystem mounts, not block volumes
+        for cap in &req.volume_capabilities {
+            if let Some(access_type) = &cap.access_type {
+                match access_type {
+                    crate::csi::volume_capability::AccessType::Mount(_) => {
+                        // Filesystem mounts are supported with any access mode
+                        // Note: for this driver, "multi-node" access modes work but each node
+                        // sees its own independent cache (that's the feature, not a bug)
+                    }
+                    crate::csi::volume_capability::AccessType::Block(_) => {
+                        // Block volumes not supported
+                        info!(volume_id = %req.volume_id, "Rejecting block volume capability");
+                        return Ok(Response::new(ValidateVolumeCapabilitiesResponse {
+                            confirmed: None,
+                            message: "Block volumes are not supported, only filesystem mounts"
+                                .to_string(),
+                        }));
+                    }
+                }
+            }
+        }
+
+        // All capabilities validated - confirm them
         Ok(Response::new(ValidateVolumeCapabilitiesResponse {
             confirmed: Some(
                 crate::csi::validate_volume_capabilities_response::Confirmed {

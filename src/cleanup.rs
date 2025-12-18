@@ -85,6 +85,16 @@ impl CleanupController {
         Self { client, namespace }
     }
 
+    /// Get a clone of the kube client
+    pub fn client(&self) -> Client {
+        self.client.clone()
+    }
+
+    /// Get the namespace
+    pub fn namespace(&self) -> &str {
+        &self.namespace
+    }
+
     /// Create a cleanup request for a volume
     pub async fn create_cleanup_request(&self, volume_id: &str) -> Result<(), kube::Error> {
         let configmaps: Api<ConfigMap> = Api::namespaced(self.client.clone(), &self.namespace);
@@ -151,6 +161,80 @@ impl CleanupController {
             .collect();
 
         Ok(statuses)
+    }
+
+    /// Prune old cleanup ConfigMaps that have exceeded the TTL
+    /// This is called periodically to garbage collect completed or timed-out cleanups
+    pub async fn prune_old_cleanups(&self, ttl: Duration) -> Result<usize, kube::Error> {
+        let configmaps: Api<ConfigMap> = Api::namespaced(self.client.clone(), &self.namespace);
+        let lp = ListParams::default().labels(CLEANUP_LABEL);
+
+        let cms = configmaps.list(&lp).await?;
+        let now = chrono::Utc::now();
+        let mut pruned = 0;
+
+        for cm in cms.items {
+            if let Some(status) = CleanupStatus::from_configmap(&cm) {
+                // Parse created_at timestamp
+                if let Ok(created_at) = chrono::DateTime::parse_from_rfc3339(&status.created_at) {
+                    let age = now.signed_duration_since(created_at);
+                    if age > chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::MAX)
+                    {
+                        // ConfigMap is older than TTL, delete it
+                        if let Some(name) = cm.metadata.name.as_ref() {
+                            match configmaps.delete(name, &Default::default()).await {
+                                Ok(_) => {
+                                    info!(
+                                        configmap = %name,
+                                        volume_id = %status.volume_id,
+                                        age_secs = age.num_seconds(),
+                                        nodes_completed = status.nodes_completed.len(),
+                                        "Pruned old cleanup ConfigMap"
+                                    );
+                                    pruned += 1;
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        configmap = %name,
+                                        error = %e,
+                                        "Failed to prune cleanup ConfigMap"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(pruned)
+    }
+}
+
+/// Run the controller cleanup pruning loop
+pub async fn run_controller_prune_loop(client: Client, namespace: String, interval: Duration, ttl: Duration) {
+    info!(
+        interval_secs = interval.as_secs(),
+        ttl_secs = ttl.as_secs(),
+        "Starting controller cleanup pruner"
+    );
+
+    let controller = CleanupController::new(client, namespace);
+
+    loop {
+        tokio::time::sleep(interval).await;
+
+        match controller.prune_old_cleanups(ttl).await {
+            Ok(count) if count > 0 => {
+                info!(count = count, "Pruned old cleanup ConfigMaps");
+            }
+            Ok(_) => {
+                debug!("No cleanup ConfigMaps to prune");
+            }
+            Err(e) => {
+                error!(error = %e, "Error pruning cleanup ConfigMaps");
+            }
+        }
     }
 }
 
