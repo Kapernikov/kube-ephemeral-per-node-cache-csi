@@ -8,10 +8,11 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  HARBOR_PROXY: core.harbor.pp.kapernikov.com/hub
 
 jobs:
   build-and-push:
-    runs-on: ubuntu-latest
+    runs-on: pepibru
     permissions:
       contents: read
       packages: write
@@ -20,8 +21,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Trust self-signed certificate
+        run: |
+          openssl s_client -connect core.harbor.pp.kapernikov.com:443 -showcerts</dev/null 2>/dev/null|openssl x509 -outform PEM | sudo tee /usr/local/share/ca-certificates/core.harbor.pp.kapernikov.com.crt
+          openssl s_client -connect registry.pp.kapernikov.com:443 -showcerts</dev/null 2>/dev/null|openssl x509 -outform PEM | sudo tee /usr/local/share/ca-certificates/registry.pp.kapernikov.com.crt
+          sudo update-ca-certificates
+
+      - name: Create buildx config file
+        run: |
+          cat << EOF | sudo tee /bconfig.toml
+          [registry."core.harbor.pp.kapernikov.com"]
+            insecure = true
+          [registry."registry.pp.kapernikov.com"]
+            insecure = true
+          EOF
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=core.harbor.pp.kapernikov.com/hub/moby/buildkit:v0.17.0
+            network=host
+          buildkitd-config: /bconfig.toml
 
       - name: Log in to Container Registry
         uses: docker/login-action@v3
@@ -29,6 +50,13 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to cache registry
+        uses: docker/login-action@v3
+        with:
+          registry: http://registry.pp.kapernikov.com
+          username: registry
+          password: iebah2Li
 
       - name: Extract metadata
         id: meta
@@ -48,12 +76,17 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
           platforms: linux/amd64,linux/arm64
+          build-args: |
+            RUST_IMAGE=${{ env.HARBOR_PROXY }}/rust:1.85-alpine
+            ALPINE_IMAGE=${{ env.HARBOR_PROXY }}/alpine:3.20
+          cache-from: type=registry,ref=registry.pp.kapernikov.com/nlc-csi:cache,registry.insecure=true
+          cache-to: type=registry,ref=registry.pp.kapernikov.com/nlc-csi:cache,registry.insecure=true
+        env:
+          DOCKER_BUILD_SUMMARY: "false"
 
   helm-release:
-    runs-on: ubuntu-latest
+    runs-on: pepibru
     needs: build-and-push
     permissions:
       contents: write

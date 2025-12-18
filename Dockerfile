@@ -1,5 +1,6 @@
 # Build stage
-FROM rust:1.85-alpine AS builder
+ARG RUST_IMAGE=rust:1.85-alpine
+FROM ${RUST_IMAGE} AS builder
 
 RUN apk add --no-cache musl-dev protobuf-dev protoc
 
@@ -16,7 +17,8 @@ COPY . .
 RUN cargo build --release
 
 # Runtime stage
-FROM alpine:3.20
+ARG ALPINE_IMAGE=alpine:3.20
+FROM ${ALPINE_IMAGE}
 
 RUN apk add --no-cache ca-certificates
 

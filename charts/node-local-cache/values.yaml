@@ -1,7 +1,7 @@
 # node-local-cache Helm chart values
 
 image:
-  repository: ghcr.io/kervel/node-local-cache
+  repository: ghcr.io/kapernikov/kube-ephemeral-per-node-cache-csi
   tag: ""  # Defaults to appVersion
   pullPolicy: IfNotPresent
 

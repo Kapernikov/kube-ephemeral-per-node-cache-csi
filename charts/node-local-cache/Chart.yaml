@@ -9,8 +9,8 @@ keywords:
   - storage
   - cache
   - kubernetes
-home: https://github.com/kervel/node-local-cache
+home: https://github.com/Kapernikov/kube-ephemeral-per-node-cache-csi
 sources:
-  - https://github.com/kervel/node-local-cache
+  - https://github.com/Kapernikov/kube-ephemeral-per-node-cache-csi
 maintainers:
-  - name: kervel
+  - name: Kapernikov
