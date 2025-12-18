@@ -1,0 +1,236 @@
+use std::path::PathBuf;
+use tonic::{Request, Response, Status};
+use tracing::{info, warn, error};
+
+use crate::csi::{
+    node_server::Node,
+    NodeGetCapabilitiesRequest, NodeGetCapabilitiesResponse,
+    NodeGetInfoRequest, NodeGetInfoResponse,
+    NodePublishVolumeRequest, NodePublishVolumeResponse,
+    NodeUnpublishVolumeRequest, NodeUnpublishVolumeResponse,
+    NodeStageVolumeRequest, NodeStageVolumeResponse,
+    NodeUnstageVolumeRequest, NodeUnstageVolumeResponse,
+    NodeGetVolumeStatsRequest, NodeGetVolumeStatsResponse,
+    NodeExpandVolumeRequest, NodeExpandVolumeResponse,
+    NodeServiceCapability,
+};
+
+use crate::volume;
+
+pub struct NodeService {
+    node_name: String,
+    base_path: PathBuf,
+}
+
+impl NodeService {
+    pub fn new(node_name: String, base_path: PathBuf) -> Self {
+        Self { node_name, base_path }
+    }
+}
+
+#[tonic::async_trait]
+impl Node for NodeService {
+    async fn node_publish_volume(
+        &self,
+        request: Request<NodePublishVolumeRequest>,
+    ) -> Result<Response<NodePublishVolumeResponse>, Status> {
+        let req = request.into_inner();
+        let volume_id = &req.volume_id;
+        let target_path = PathBuf::from(&req.target_path);
+        let readonly = req.readonly;
+
+        info!(
+            volume_id = %volume_id,
+            target_path = %target_path.display(),
+            readonly = readonly,
+            "NodePublishVolume called"
+        );
+
+        // Validate volume ID
+        if !volume::validate_volume_id(volume_id) {
+            return Err(Status::invalid_argument(format!(
+                "Invalid volume ID: {}",
+                volume_id
+            )));
+        }
+
+        // Construct source path
+        let source_path = volume::volume_path(&self.base_path, volume_id);
+
+        // Create source directory if it doesn't exist
+        if let Err(e) = std::fs::create_dir_all(&source_path) {
+            error!(path = %source_path.display(), error = %e, "Failed to create source directory");
+            return Err(Status::internal(format!(
+                "Failed to create volume directory: {}",
+                e
+            )));
+        }
+
+        // Create target directory parent if needed
+        if let Some(parent) = target_path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                error!(path = %parent.display(), error = %e, "Failed to create target parent directory");
+                return Err(Status::internal(format!(
+                    "Failed to create target parent directory: {}",
+                    e
+                )));
+            }
+        }
+
+        // Create target mount point (directory for volume mount)
+        if !target_path.exists() {
+            if let Err(e) = std::fs::create_dir_all(&target_path) {
+                error!(path = %target_path.display(), error = %e, "Failed to create target directory");
+                return Err(Status::internal(format!(
+                    "Failed to create target directory: {}",
+                    e
+                )));
+            }
+        }
+
+        // Check if already mounted
+        if volume::is_mounted(&target_path)? {
+            info!(target_path = %target_path.display(), "Already mounted, skipping");
+            return Ok(Response::new(NodePublishVolumeResponse {}));
+        }
+
+        // Perform bind mount
+        let mount_flags = if readonly {
+            nix::mount::MsFlags::MS_BIND | nix::mount::MsFlags::MS_RDONLY
+        } else {
+            nix::mount::MsFlags::MS_BIND
+        };
+
+        if let Err(e) = nix::mount::mount(
+            Some(&source_path),
+            &target_path,
+            None::<&str>,
+            mount_flags,
+            None::<&str>,
+        ) {
+            error!(
+                source = %source_path.display(),
+                target = %target_path.display(),
+                error = %e,
+                "Failed to bind mount"
+            );
+            return Err(Status::internal(format!("Failed to bind mount: {}", e)));
+        }
+
+        // For readonly, we need to remount with readonly flag
+        if readonly {
+            let remount_flags = nix::mount::MsFlags::MS_BIND
+                | nix::mount::MsFlags::MS_REMOUNT
+                | nix::mount::MsFlags::MS_RDONLY;
+
+            if let Err(e) = nix::mount::mount(
+                None::<&str>,
+                &target_path,
+                None::<&str>,
+                remount_flags,
+                None::<&str>,
+            ) {
+                warn!(error = %e, "Failed to remount readonly, continuing anyway");
+            }
+        }
+
+        info!(
+            source = %source_path.display(),
+            target = %target_path.display(),
+            "Volume mounted successfully"
+        );
+
+        Ok(Response::new(NodePublishVolumeResponse {}))
+    }
+
+    async fn node_unpublish_volume(
+        &self,
+        request: Request<NodeUnpublishVolumeRequest>,
+    ) -> Result<Response<NodeUnpublishVolumeResponse>, Status> {
+        let req = request.into_inner();
+        let volume_id = &req.volume_id;
+        let target_path = PathBuf::from(&req.target_path);
+
+        info!(
+            volume_id = %volume_id,
+            target_path = %target_path.display(),
+            "NodeUnpublishVolume called"
+        );
+
+        // Check if mounted
+        if !volume::is_mounted(&target_path)? {
+            info!(target_path = %target_path.display(), "Not mounted, nothing to do");
+            return Ok(Response::new(NodeUnpublishVolumeResponse {}));
+        }
+
+        // Unmount
+        if let Err(e) = nix::mount::umount(&target_path) {
+            // Try lazy unmount if regular unmount fails
+            warn!(error = %e, "Regular unmount failed, trying lazy unmount");
+            if let Err(e) = nix::mount::umount2(&target_path, nix::mount::MntFlags::MNT_DETACH) {
+                error!(error = %e, "Lazy unmount also failed");
+                return Err(Status::internal(format!("Failed to unmount: {}", e)));
+            }
+        }
+
+        info!(target_path = %target_path.display(), "Volume unmounted successfully");
+
+        Ok(Response::new(NodeUnpublishVolumeResponse {}))
+    }
+
+    async fn node_get_capabilities(
+        &self,
+        _request: Request<NodeGetCapabilitiesRequest>,
+    ) -> Result<Response<NodeGetCapabilitiesResponse>, Status> {
+        info!("NodeGetCapabilities called");
+
+        // We don't need staging - return empty capabilities
+        let capabilities: Vec<NodeServiceCapability> = vec![];
+
+        Ok(Response::new(NodeGetCapabilitiesResponse { capabilities }))
+    }
+
+    async fn node_get_info(
+        &self,
+        _request: Request<NodeGetInfoRequest>,
+    ) -> Result<Response<NodeGetInfoResponse>, Status> {
+        info!(node_name = %self.node_name, "NodeGetInfo called");
+
+        Ok(Response::new(NodeGetInfoResponse {
+            node_id: self.node_name.clone(),
+            max_volumes_per_node: 0, // No limit
+            // No topology - volumes accessible from any node
+            accessible_topology: None,
+        }))
+    }
+
+    // Staging not implemented - not needed for bind mounts
+
+    async fn node_stage_volume(
+        &self,
+        _request: Request<NodeStageVolumeRequest>,
+    ) -> Result<Response<NodeStageVolumeResponse>, Status> {
+        Err(Status::unimplemented("NodeStageVolume not supported"))
+    }
+
+    async fn node_unstage_volume(
+        &self,
+        _request: Request<NodeUnstageVolumeRequest>,
+    ) -> Result<Response<NodeUnstageVolumeResponse>, Status> {
+        Err(Status::unimplemented("NodeUnstageVolume not supported"))
+    }
+
+    async fn node_get_volume_stats(
+        &self,
+        _request: Request<NodeGetVolumeStatsRequest>,
+    ) -> Result<Response<NodeGetVolumeStatsResponse>, Status> {
+        Err(Status::unimplemented("NodeGetVolumeStats not supported"))
+    }
+
+    async fn node_expand_volume(
+        &self,
+        _request: Request<NodeExpandVolumeRequest>,
+    ) -> Result<Response<NodeExpandVolumeResponse>, Status> {
+        Err(Status::unimplemented("NodeExpandVolume not supported"))
+    }
+}
