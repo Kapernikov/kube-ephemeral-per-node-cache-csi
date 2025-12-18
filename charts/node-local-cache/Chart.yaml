@@ -1,0 +1,16 @@
+apiVersion: v2
+name: node-local-cache
+description: CSI driver for node-local ephemeral cache volumes
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - csi
+  - storage
+  - cache
+  - kubernetes
+home: https://github.com/kervel/node-local-cache
+sources:
+  - https://github.com/kervel/node-local-cache
+maintainers:
+  - name: kervel

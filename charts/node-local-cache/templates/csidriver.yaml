@@ -1,0 +1,16 @@
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: {{ include "node-local-cache.driverName" . }}
+  labels:
+    {{- include "node-local-cache.labels" . | nindent 4 }}
+spec:
+  # We don't need controller attach/detach
+  attachRequired: false
+  # We don't need pod info
+  podInfoOnMount: false
+  # Standard persistent volumes
+  volumeLifecycleModes:
+    - Persistent
+  # Filesystem only (no block)
+  fsGroupPolicy: File

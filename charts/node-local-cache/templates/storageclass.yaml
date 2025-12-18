@@ -1,0 +1,29 @@
+{{- if .Values.storageClasses.delete.enabled }}
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .Values.storageClasses.delete.name }}
+  labels:
+    {{- include "node-local-cache.labels" . | nindent 4 }}
+  {{- if .Values.storageClasses.delete.isDefault }}
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+  {{- end }}
+provisioner: {{ include "node-local-cache.driverName" . }}
+reclaimPolicy: {{ .Values.storageClasses.delete.reclaimPolicy }}
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: false
+{{- end }}
+---
+{{- if .Values.storageClasses.retain.enabled }}
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .Values.storageClasses.retain.name }}
+  labels:
+    {{- include "node-local-cache.labels" . | nindent 4 }}
+provisioner: {{ include "node-local-cache.driverName" . }}
+reclaimPolicy: {{ .Values.storageClasses.retain.reclaimPolicy }}
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: false
+{{- end }}

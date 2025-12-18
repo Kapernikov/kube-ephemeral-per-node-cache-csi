@@ -1,0 +1,85 @@
+# node-local-cache Helm chart values
+
+image:
+  repository: ghcr.io/kervel/node-local-cache
+  tag: ""  # Defaults to appVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# CSI driver settings
+csi:
+  # Base path for cache volumes on nodes
+  basePath: /var/node-local-cache
+  # Log level: trace, debug, info, warn, error
+  logLevel: info
+
+# Storage classes to create
+storageClasses:
+  # node-local-cache-delete - cleans up on PVC deletion
+  delete:
+    enabled: true
+    name: node-local-cache-delete
+    isDefault: false
+    reclaimPolicy: Delete
+
+  # node-local-cache-retain - keeps data for debugging
+  retain:
+    enabled: true
+    name: node-local-cache-retain
+    reclaimPolicy: Retain
+
+# Controller deployment settings
+controller:
+  replicas: 1
+  resources:
+    limits:
+      memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 32Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Node daemonset settings
+node:
+  resources:
+    limits:
+      memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 32Mi
+  tolerations:
+    # Run on all nodes including control plane
+    - operator: Exists
+  nodeSelector: {}
+
+# CSI sidecar images
+sidecars:
+  provisioner:
+    image: registry.k8s.io/sig-storage/csi-provisioner:v5.0.1
+    resources:
+      limits:
+        memory: 128Mi
+      requests:
+        cpu: 10m
+        memory: 32Mi
+
+  registrar:
+    image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.11.1
+    resources:
+      limits:
+        memory: 64Mi
+      requests:
+        cpu: 10m
+        memory: 16Mi
+
+# Service account settings
+serviceAccount:
+  create: true
+  name: ""  # Defaults to release name
+
+# RBAC settings
+rbac:
+  create: true

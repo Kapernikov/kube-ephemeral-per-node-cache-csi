@@ -39,3 +39,7 @@ tonic-build = "0.12"
 [[bin]]
 name = "node-local-cache"
 path = "src/main.rs"
+
+[dev-dependencies]
+tower = "0.5"
+hyper-util = "0.1"
