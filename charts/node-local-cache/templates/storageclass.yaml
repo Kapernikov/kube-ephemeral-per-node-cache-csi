@@ -11,7 +11,7 @@ metadata:
   {{- end }}
 provisioner: {{ include "node-local-cache.driverName" . }}
 reclaimPolicy: {{ .Values.storageClasses.delete.reclaimPolicy }}
-volumeBindingMode: WaitForFirstConsumer
+volumeBindingMode: Immediate
 allowVolumeExpansion: false
 {{- end }}
 ---
@@ -24,6 +24,6 @@ metadata:
     {{- include "node-local-cache.labels" . | nindent 4 }}
 provisioner: {{ include "node-local-cache.driverName" . }}
 reclaimPolicy: {{ .Values.storageClasses.retain.reclaimPolicy }}
-volumeBindingMode: WaitForFirstConsumer
+volumeBindingMode: Immediate
 allowVolumeExpansion: false
 {{- end }}

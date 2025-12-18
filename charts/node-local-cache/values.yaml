@@ -1,64 +1,86 @@
 # node-local-cache Helm chart values
 
+# -- Container image repository
+# @default -- `ghcr.io/kapernikov/kube-ephemeral-per-node-cache-csi`
 image:
+  # -- Image repository
   repository: ghcr.io/kapernikov/kube-ephemeral-per-node-cache-csi
-  tag: ""  # Defaults to appVersion
+  # -- Image tag (defaults to appVersion)
+  tag: ""
+  # -- Image pull policy
   pullPolicy: IfNotPresent
 
+# -- Image pull secrets for private registries
 imagePullSecrets: []
 
 # CSI driver settings
 csi:
-  # Base path for cache volumes on nodes
+  # -- Base path on nodes where cache volumes are stored
   basePath: /var/node-local-cache
-  # Log level: trace, debug, info, warn, error
+  # -- Log level: trace, debug, info, warn, error
   logLevel: info
 
-# Storage classes to create
+# Storage classes configuration
 storageClasses:
-  # node-local-cache-delete - cleans up on PVC deletion
+  # Storage class that deletes data on PVC deletion
   delete:
+    # -- Enable the delete storage class
     enabled: true
+    # -- Name of the delete storage class
     name: node-local-cache-delete
+    # -- Set as default storage class
     isDefault: false
+    # -- Reclaim policy (Delete or Retain)
     reclaimPolicy: Delete
 
-  # node-local-cache-retain - keeps data for debugging
+  # Storage class that retains data (useful for debugging)
   retain:
+    # -- Enable the retain storage class
     enabled: true
+    # -- Name of the retain storage class
     name: node-local-cache-retain
+    # -- Reclaim policy
     reclaimPolicy: Retain
 
 # Controller deployment settings
 controller:
+  # -- Number of controller replicas
   replicas: 1
+  # -- Resource limits and requests for controller
   resources:
     limits:
       memory: 128Mi
     requests:
       cpu: 10m
       memory: 32Mi
+  # -- Node selector for controller pod
   nodeSelector: {}
+  # -- Tolerations for controller pod
   tolerations: []
+  # -- Affinity rules for controller pod
   affinity: {}
 
 # Node daemonset settings
 node:
+  # -- Resource limits and requests for node pods
   resources:
     limits:
       memory: 128Mi
     requests:
       cpu: 10m
       memory: 32Mi
+  # -- Tolerations for node pods (runs on all nodes by default)
   tolerations:
-    # Run on all nodes including control plane
     - operator: Exists
+  # -- Node selector for node pods
   nodeSelector: {}
 
 # CSI sidecar images
 sidecars:
   provisioner:
+    # -- CSI provisioner image
     image: registry.k8s.io/sig-storage/csi-provisioner:v5.0.1
+    # -- Resource limits and requests for provisioner
     resources:
       limits:
         memory: 128Mi
@@ -67,7 +89,9 @@ sidecars:
         memory: 32Mi
 
   registrar:
+    # -- CSI node driver registrar image
     image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.11.1
+    # -- Resource limits and requests for registrar
     resources:
       limits:
         memory: 64Mi
@@ -77,9 +101,12 @@ sidecars:
 
 # Service account settings
 serviceAccount:
+  # -- Create a service account
   create: true
-  name: ""  # Defaults to release name
+  # -- Service account name (defaults to release fullname)
+  name: ""
 
 # RBAC settings
 rbac:
+  # -- Create RBAC resources
   create: true
