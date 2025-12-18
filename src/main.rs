@@ -48,6 +48,10 @@ struct Args {
     /// Log level
     #[arg(long, default_value = "info")]
     log_level: Level,
+
+    /// Disable cleanup service (for testing only - will leak disk space)
+    #[arg(long, default_value = "false")]
+    no_cleanup_service: bool,
 }
 
 #[tokio::main]
@@ -92,27 +96,32 @@ async fn run_controller(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
 
     let identity_service = identity::IdentityService::new(true); // controller mode
 
-    // Try to create kube client for cleanup coordination
-    let controller_service = match kube::Client::try_default().await {
-        Ok(client) => {
-            info!(namespace = %args.namespace, "Kubernetes client initialized, cleanup enabled");
+    // Create kube client for cleanup coordination
+    let controller_service = if args.no_cleanup_service {
+        tracing::warn!("Cleanup service disabled via --no-cleanup-service flag. This will leak disk space!");
+        controller::ControllerService::new()
+    } else {
+        let client = kube::Client::try_default().await.map_err(|e| {
+            format!(
+                "Failed to create Kubernetes client: {}. \
+                Use --no-cleanup-service for testing without cleanup.",
+                e
+            )
+        })?;
 
-            // Start cleanup pruner in background
-            // Prune ConfigMaps older than 5 minutes, check every minute
-            tokio::spawn(cleanup::run_controller_prune_loop(
-                client.clone(),
-                args.namespace.clone(),
-                Duration::from_secs(60),  // check interval
-                Duration::from_secs(300), // TTL (5 minutes)
-            ));
+        info!(namespace = %args.namespace, "Kubernetes client initialized, cleanup enabled");
 
-            let cleanup_ctrl = cleanup::CleanupController::new(client, args.namespace.clone());
-            controller::ControllerService::with_cleanup(cleanup_ctrl)
-        }
-        Err(e) => {
-            info!(error = %e, "Kubernetes client not available, cleanup disabled");
-            controller::ControllerService::new()
-        }
+        // Start cleanup pruner in background
+        // Prune ConfigMaps older than 5 minutes, check every minute
+        tokio::spawn(cleanup::run_controller_prune_loop(
+            client.clone(),
+            args.namespace.clone(),
+            Duration::from_secs(60),  // check interval
+            Duration::from_secs(300), // TTL (5 minutes)
+        ));
+
+        let cleanup_ctrl = cleanup::CleanupController::new(client, args.namespace.clone());
+        controller::ControllerService::with_cleanup(cleanup_ctrl)
     };
 
     // Remove existing socket if present
@@ -147,8 +156,18 @@ async fn run_node(args: &Args, node_name: &str) -> Result<(), Box<dyn std::error
     let identity_service = identity::IdentityService::new(false); // node mode
     let node_service = node::NodeService::new(node_name.to_string(), args.base_path.clone());
 
-    // Start cleanup watcher in background if kube client is available
-    if let Ok(client) = kube::Client::try_default().await {
+    // Start cleanup watcher in background
+    if args.no_cleanup_service {
+        tracing::warn!("Cleanup service disabled via --no-cleanup-service flag. This will leak disk space!");
+    } else {
+        let client = kube::Client::try_default().await.map_err(|e| {
+            format!(
+                "Failed to create Kubernetes client: {}. \
+                Use --no-cleanup-service for testing without cleanup.",
+                e
+            )
+        })?;
+
         info!(
             namespace = %args.namespace,
             node = %node_name,
@@ -162,8 +181,6 @@ async fn run_node(args: &Args, node_name: &str) -> Result<(), Box<dyn std::error
         );
         // Run cleanup loop in background (every 10 seconds)
         tokio::spawn(cleanup_node.run_cleanup_loop(Duration::from_secs(10)));
-    } else {
-        info!("Kubernetes client not available, cleanup watcher disabled");
     }
 
     // Remove existing socket if present
