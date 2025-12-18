@@ -76,7 +76,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           build-args: |
             RUST_IMAGE=${{ env.HARBOR_PROXY }}/rust:1.85-alpine
             ALPINE_IMAGE=${{ env.HARBOR_PROXY }}/alpine:3.20
