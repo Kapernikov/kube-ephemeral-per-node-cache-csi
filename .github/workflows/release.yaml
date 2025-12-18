@@ -124,4 +124,5 @@ jobs:
 
       - name: Push Helm chart to GHCR
         run: |
-          helm push node-local-cache-${{ steps.version.outputs.version }}.tgz oci://ghcr.io/${{ github.repository_owner }}/charts
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          helm push node-local-cache-${{ steps.version.outputs.version }}.tgz oci://ghcr.io/${OWNER}/charts
