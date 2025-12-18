@@ -1,5 +1,8 @@
-# Build stage
+# Declare ARGs before any FROM to use them in FROM instructions
 ARG RUST_IMAGE=rust:1.85-alpine
+ARG ALPINE_IMAGE=alpine:3.20
+
+# Build stage
 FROM ${RUST_IMAGE} AS builder
 
 RUN apk add --no-cache musl-dev protobuf-dev protoc
@@ -17,7 +20,6 @@ COPY . .
 RUN cargo build --release
 
 # Runtime stage
-ARG ALPINE_IMAGE=alpine:3.20
 FROM ${ALPINE_IMAGE}
 
 RUN apk add --no-cache ca-certificates
