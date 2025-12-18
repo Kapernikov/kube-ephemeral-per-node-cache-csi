@@ -1,6 +1,9 @@
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
-use tracing::info;
+use tracing::{info, warn};
 
+use crate::cleanup::CleanupController;
 use crate::csi::{
     controller_server::Controller,
     ControllerGetCapabilitiesRequest, ControllerGetCapabilitiesResponse,
@@ -23,11 +26,19 @@ use crate::csi::{
 
 use crate::volume;
 
-pub struct ControllerService;
+pub struct ControllerService {
+    cleanup: Option<Arc<RwLock<CleanupController>>>,
+}
 
 impl ControllerService {
     pub fn new() -> Self {
-        Self
+        Self { cleanup: None }
+    }
+
+    pub fn with_cleanup(cleanup: CleanupController) -> Self {
+        Self {
+            cleanup: Some(Arc::new(RwLock::new(cleanup))),
+        }
     }
 }
 
@@ -68,9 +79,17 @@ impl Controller for ControllerService {
         let req = request.into_inner();
         info!(volume_id = %req.volume_id, "DeleteVolume called");
 
-        // TODO: Phase 8 - implement cleanup mechanism
-        // For now, just acknowledge deletion
-        // The node plugin directories will be cleaned up separately
+        // Create cleanup request if cleanup controller is available
+        if let Some(cleanup) = &self.cleanup {
+            let cleanup = cleanup.read().await;
+            if let Err(e) = cleanup.create_cleanup_request(&req.volume_id).await {
+                warn!(
+                    volume_id = %req.volume_id,
+                    error = %e,
+                    "Failed to create cleanup request, continuing anyway"
+                );
+            }
+        }
 
         Ok(Response::new(DeleteVolumeResponse {}))
     }

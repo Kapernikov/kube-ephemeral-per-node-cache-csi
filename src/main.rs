@@ -7,6 +7,7 @@ mod identity;
 mod controller;
 mod node;
 mod volume;
+mod cleanup;
 
 pub mod csi {
     tonic::include_proto!("csi.v1");
@@ -37,6 +38,10 @@ struct Args {
     /// Base path for cache volumes
     #[arg(long, default_value = "/var/node-local-cache")]
     base_path: PathBuf,
+
+    /// Kubernetes namespace for cleanup coordination
+    #[arg(long, env = "POD_NAMESPACE", default_value = "node-local-cache")]
+    namespace: String,
 
     /// Log level
     #[arg(long, default_value = "info")]
@@ -80,7 +85,19 @@ async fn run_controller(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     use csi::controller_server::ControllerServer;
 
     let identity_service = identity::IdentityService::new();
-    let controller_service = controller::ControllerService::new();
+
+    // Try to create kube client for cleanup coordination
+    let controller_service = match kube::Client::try_default().await {
+        Ok(client) => {
+            info!(namespace = %args.namespace, "Kubernetes client initialized, cleanup enabled");
+            let cleanup = cleanup::CleanupController::new(client, args.namespace.clone());
+            controller::ControllerService::with_cleanup(cleanup)
+        }
+        Err(e) => {
+            info!(error = %e, "Kubernetes client not available, cleanup disabled");
+            controller::ControllerService::new()
+        }
+    };
 
     // Remove existing socket if present
     let _ = std::fs::remove_file(&args.csi_socket);
@@ -106,12 +123,32 @@ async fn run_controller(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn run_node(args: &Args, node_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use std::time::Duration;
     use tonic::transport::Server;
     use csi::identity_server::IdentityServer;
     use csi::node_server::NodeServer;
 
     let identity_service = identity::IdentityService::new();
     let node_service = node::NodeService::new(node_name.to_string(), args.base_path.clone());
+
+    // Start cleanup watcher in background if kube client is available
+    if let Ok(client) = kube::Client::try_default().await {
+        info!(
+            namespace = %args.namespace,
+            node = %node_name,
+            "Starting cleanup watcher"
+        );
+        let cleanup_node = cleanup::CleanupNode::new(
+            client,
+            args.namespace.clone(),
+            node_name.to_string(),
+            args.base_path.clone(),
+        );
+        // Run cleanup loop in background (every 10 seconds)
+        tokio::spawn(cleanup_node.run_cleanup_loop(Duration::from_secs(10)));
+    } else {
+        info!("Kubernetes client not available, cleanup watcher disabled");
+    }
 
     // Remove existing socket if present
     let _ = std::fs::remove_file(&args.csi_socket);
