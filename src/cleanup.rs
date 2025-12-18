@@ -178,8 +178,7 @@ impl CleanupController {
                 // Parse created_at timestamp
                 if let Ok(created_at) = chrono::DateTime::parse_from_rfc3339(&status.created_at) {
                     let age = now.signed_duration_since(created_at);
-                    if age > chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::MAX)
-                    {
+                    if age > chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::MAX) {
                         // ConfigMap is older than TTL, delete it
                         if let Some(name) = cm.metadata.name.as_ref() {
                             match configmaps.delete(name, &Default::default()).await {
@@ -212,7 +211,12 @@ impl CleanupController {
 }
 
 /// Run the controller cleanup pruning loop
-pub async fn run_controller_prune_loop(client: Client, namespace: String, interval: Duration, ttl: Duration) {
+pub async fn run_controller_prune_loop(
+    client: Client,
+    namespace: String,
+    interval: Duration,
+    ttl: Duration,
+) {
     info!(
         interval_secs = interval.as_secs(),
         ttl_secs = ttl.as_secs(),
