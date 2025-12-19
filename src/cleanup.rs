@@ -12,9 +12,11 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
 
-use k8s_openapi::api::core::v1::ConfigMap;
+use rand::Rng;
+
+use k8s_openapi::api::core::v1::{ConfigMap, Event, Node, ObjectReference};
 use kube::{
-    api::{Api, ListParams, Patch, PatchParams, PostParams},
+    api::{Api, ListParams, PostParams},
     Client,
 };
 use serde::{Deserialize, Serialize};
@@ -26,7 +28,21 @@ pub const VOLUME_LABEL: &str = "node-local-cache.csi.io/volume";
 pub const VOLUME_CM_PREFIX: &str = "nlc-vol-";
 
 /// Maximum retries for optimistic concurrency conflicts
-const MAX_RETRIES: u32 = 5;
+/// High value to handle gang scheduling scenarios where many pods start simultaneously
+const MAX_RETRIES: u32 = 15;
+
+/// Base backoff delay in milliseconds for optimistic concurrency retries
+const BASE_BACKOFF_MS: u64 = 10;
+/// Maximum backoff delay in milliseconds
+const MAX_BACKOFF_MS: u64 = 1000;
+
+/// Sleep with exponential backoff and jitter to avoid thundering herd
+async fn backoff_sleep(attempt: u32) {
+    let base = BASE_BACKOFF_MS * 2u64.pow(attempt.min(6)); // cap exponent to avoid overflow
+    let max = base.min(MAX_BACKOFF_MS);
+    let jitter = rand::rng().random_range(0..=max);
+    tokio::time::sleep(Duration::from_millis(jitter)).await;
+}
 
 /// Volume status stored in ConfigMap data
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +57,9 @@ pub struct VolumeStatus {
     pub nodes_completed: Vec<String>,
     #[serde(default)]
     pub nodes_failed: Vec<String>,
+    /// Nodes that no longer exist in the cluster (scaled down, decommissioned)
+    #[serde(default)]
+    pub nodes_decommissioned: Vec<String>,
 }
 
 impl VolumeStatus {
@@ -52,6 +71,7 @@ impl VolumeStatus {
             nodes_with_volume: Vec::new(),
             nodes_completed: Vec::new(),
             nodes_failed: Vec::new(),
+            nodes_decommissioned: Vec::new(),
         }
     }
 
@@ -94,7 +114,13 @@ impl VolumeStatus {
         }
     }
 
-    /// Check if cleanup is complete (all nodes with volume have reported)
+    pub fn mark_node_decommissioned(&mut self, node_name: &str) {
+        if !self.nodes_decommissioned.contains(&node_name.to_string()) {
+            self.nodes_decommissioned.push(node_name.to_string());
+        }
+    }
+
+    /// Check if cleanup is complete (all nodes with volume have reported or are gone)
     pub fn is_cleanup_complete(&self) -> bool {
         if self.cleanup_requested_at.is_none() {
             return false;
@@ -104,24 +130,66 @@ impl VolumeStatus {
             .nodes_completed
             .iter()
             .chain(self.nodes_failed.iter())
+            .chain(self.nodes_decommissioned.iter())
             .collect();
         nodes_with.is_subset(&nodes_done)
     }
 
-    /// Check if cleanup has timed out
-    pub fn is_cleanup_timed_out(&self, timeout: Duration) -> bool {
-        if let Some(ref requested_at) = self.cleanup_requested_at {
-            if let Ok(requested) = chrono::DateTime::parse_from_rfc3339(requested_at) {
-                let age = chrono::Utc::now().signed_duration_since(requested);
-                return age > chrono::Duration::from_std(timeout).unwrap_or(chrono::Duration::MAX);
-            }
-        }
-        false
+    /// Get nodes that haven't reported yet (not completed, failed, or decommissioned)
+    pub fn pending_nodes(&self) -> Vec<&String> {
+        self.nodes_with_volume
+            .iter()
+            .filter(|n| {
+                !self.nodes_completed.contains(n)
+                    && !self.nodes_failed.contains(n)
+                    && !self.nodes_decommissioned.contains(n)
+            })
+            .collect()
     }
 }
 
 fn configmap_name(volume_id: &str) -> String {
     format!("{}{}", VOLUME_CM_PREFIX, volume_id)
+}
+
+/// Emit a Kubernetes event for visibility
+/// Events show up in `kubectl get events` and `kubectl describe`
+pub async fn emit_event(
+    client: &Client,
+    namespace: &str,
+    volume_id: &str,
+    reason: &str,
+    message: &str,
+    event_type: &str, // "Normal" or "Warning"
+) {
+    let events: Api<Event> = Api::namespaced(client.clone(), namespace);
+    let cm_name = configmap_name(volume_id);
+
+    let event = Event {
+        metadata: kube::api::ObjectMeta {
+            generate_name: Some("nlc-".to_string()),
+            namespace: Some(namespace.to_string()),
+            ..Default::default()
+        },
+        involved_object: ObjectReference {
+            api_version: Some("v1".to_string()),
+            kind: Some("ConfigMap".to_string()),
+            name: Some(cm_name),
+            namespace: Some(namespace.to_string()),
+            ..Default::default()
+        },
+        reason: Some(reason.to_string()),
+        message: Some(message.to_string()),
+        type_: Some(event_type.to_string()),
+        first_timestamp: Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
+            chrono::Utc::now(),
+        )),
+        ..Default::default()
+    };
+
+    if let Err(e) = events.create(&PostParams::default(), &event).await {
+        warn!(reason = %reason, error = %e, "Failed to emit event");
+    }
 }
 
 /// Register that a node has published a volume (call from NodePublishVolume)
@@ -176,6 +244,7 @@ pub async fn register_node_publish(
                     }
                     Err(kube::Error::Api(ref err)) if err.code == 409 => {
                         debug!(attempt = attempt, "Conflict updating ConfigMap, retrying");
+                        backoff_sleep(attempt).await;
                         continue;
                     }
                     Err(e) => return Err(e),
@@ -212,6 +281,7 @@ pub async fn register_node_publish(
                     Err(kube::Error::Api(ref err)) if err.code == 409 => {
                         // Someone else created it, retry to update
                         debug!("ConfigMap created by another, retrying");
+                        backoff_sleep(attempt).await;
                         continue;
                     }
                     Err(e) => return Err(e),
@@ -274,10 +344,24 @@ pub async fn mark_volume_for_cleanup(
                             nodes_to_cleanup = status.nodes_with_volume.len(),
                             "Marked volume for cleanup"
                         );
+                        emit_event(
+                            client,
+                            namespace,
+                            volume_id,
+                            "CleanupRequested",
+                            &format!(
+                                "Volume cleanup requested, {} node(s) to clean: {:?}",
+                                status.nodes_with_volume.len(),
+                                status.nodes_with_volume
+                            ),
+                            "Normal",
+                        )
+                        .await;
                         return Ok(());
                     }
                     Err(kube::Error::Api(ref err)) if err.code == 409 => {
                         debug!(attempt = attempt, "Conflict, retrying");
+                        backoff_sleep(attempt).await;
                         continue;
                     }
                     Err(e) => return Err(e),
@@ -302,6 +386,8 @@ pub async fn mark_volume_for_cleanup(
 
 /// Mark node cleanup complete with optimistic concurrency
 async fn mark_node_cleanup_complete(
+    client: &Client,
+    namespace: &str,
     configmaps: &Api<ConfigMap>,
     cm_name: &str,
     node_name: &str,
@@ -319,6 +405,8 @@ async fn mark_node_cleanup_complete(
                 return Ok(());
             }
         };
+
+        let volume_id = status.volume_id.clone();
 
         if success {
             status.mark_node_completed(node_name);
@@ -341,12 +429,29 @@ async fn mark_node_cleanup_complete(
             .replace(cm_name, &PostParams::default(), &patch)
             .await
         {
-            Ok(_) => return Ok(()),
+            Ok(_) => {
+                let (reason, msg, event_type) = if success {
+                    (
+                        "NodeCleanupComplete",
+                        format!("Node {} completed cleanup", node_name),
+                        "Normal",
+                    )
+                } else {
+                    (
+                        "NodeCleanupFailed",
+                        format!("Node {} failed cleanup", node_name),
+                        "Warning",
+                    )
+                };
+                emit_event(client, namespace, &volume_id, reason, &msg, event_type).await;
+                return Ok(());
+            }
             Err(kube::Error::Api(ref err)) if err.code == 409 => {
                 debug!(
                     attempt = attempt,
                     "Conflict updating cleanup status, retrying"
                 );
+                backoff_sleep(attempt).await;
                 continue;
             }
             Err(e) => return Err(e),
@@ -368,25 +473,130 @@ impl CleanupController {
         Self { client, namespace }
     }
 
-    pub fn client(&self) -> Client {
-        self.client.clone()
-    }
-
-    pub fn namespace(&self) -> &str {
-        &self.namespace
-    }
-
     /// Create a cleanup request for a volume (legacy method, calls mark_volume_for_cleanup)
     pub async fn create_cleanup_request(&self, volume_id: &str) -> Result<(), kube::Error> {
         mark_volume_for_cleanup(&self.client, &self.namespace, volume_id).await
     }
 
-    /// Prune cleanup ConfigMaps that are complete or timed out
-    pub async fn prune_completed_cleanups(&self, timeout: Duration) -> Result<usize, kube::Error> {
+    /// Get set of node names that exist in the cluster
+    async fn get_existing_nodes(&self) -> Result<HashSet<String>, kube::Error> {
+        let nodes: Api<Node> = Api::all(self.client.clone());
+        let node_list = nodes.list(&ListParams::default()).await?;
+        let names: HashSet<String> = node_list
+            .items
+            .iter()
+            .filter_map(|n| n.metadata.name.clone())
+            .collect();
+        Ok(names)
+    }
+
+    /// Check for decommissioned nodes and update ConfigMap
+    /// Returns true if any nodes were marked as decommissioned
+    async fn mark_decommissioned_nodes(
+        &self,
+        configmaps: &Api<ConfigMap>,
+        cm: &ConfigMap,
+        status: &VolumeStatus,
+        existing_nodes: &HashSet<String>,
+    ) -> Result<bool, kube::Error> {
+        let pending = status.pending_nodes();
+        let decommissioned: Vec<_> = pending
+            .iter()
+            .filter(|n| !existing_nodes.contains(**n))
+            .map(|n| (*n).clone())
+            .collect();
+
+        if decommissioned.is_empty() {
+            return Ok(false);
+        }
+
+        let cm_name = match cm.metadata.name.as_ref() {
+            Some(n) => n,
+            None => return Ok(false),
+        };
+
+        // Update with optimistic concurrency
+        for attempt in 0..MAX_RETRIES {
+            let existing = configmaps.get(cm_name).await?;
+            let resource_version = existing.metadata.resource_version.clone();
+            let labels = existing.metadata.labels.clone();
+
+            let mut updated_status = match VolumeStatus::from_configmap(&existing) {
+                Some(s) => s,
+                None => return Ok(false),
+            };
+
+            for node in &decommissioned {
+                updated_status.mark_node_decommissioned(node);
+            }
+
+            let patch = ConfigMap {
+                metadata: kube::api::ObjectMeta {
+                    name: Some(cm_name.to_string()),
+                    resource_version,
+                    labels,
+                    ..Default::default()
+                },
+                data: Some(updated_status.to_configmap_data()),
+                ..Default::default()
+            };
+
+            match configmaps
+                .replace(cm_name, &PostParams::default(), &patch)
+                .await
+            {
+                Ok(_) => {
+                    info!(
+                        configmap = %cm_name,
+                        volume_id = %status.volume_id,
+                        decommissioned_nodes = ?decommissioned,
+                        "Marked nodes as decommissioned (no longer exist in cluster)"
+                    );
+                    emit_event(
+                        &self.client,
+                        &self.namespace,
+                        &status.volume_id,
+                        "NodeDecommissioned",
+                        &format!(
+                            "Node(s) no longer exist in cluster, marked as decommissioned: {:?}",
+                            decommissioned
+                        ),
+                        "Warning",
+                    )
+                    .await;
+                    return Ok(true);
+                }
+                Err(kube::Error::Api(ref err)) if err.code == 409 => {
+                    debug!(
+                        attempt = attempt,
+                        "Conflict marking decommissioned, retrying"
+                    );
+                    backoff_sleep(attempt).await;
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        warn!(configmap = %cm_name, "Max retries exceeded marking decommissioned nodes");
+        Ok(false)
+    }
+
+    /// Process cleanup ConfigMaps: mark decommissioned nodes and prune completed ones
+    pub async fn process_cleanups(&self) -> Result<usize, kube::Error> {
         let configmaps: Api<ConfigMap> = Api::namespaced(self.client.clone(), &self.namespace);
         let lp = ListParams::default().labels(&format!("{}=cleanup", VOLUME_LABEL));
 
         let cms = configmaps.list(&lp).await?;
+
+        if cms.items.is_empty() {
+            return Ok(0);
+        }
+
+        // Get existing nodes once for all ConfigMaps
+        let existing_nodes = self.get_existing_nodes().await?;
+        debug!(node_count = existing_nodes.len(), "Fetched cluster nodes");
+
         let mut pruned = 0;
 
         for cm in cms.items {
@@ -400,25 +610,54 @@ impl CleanupController {
                 None => continue,
             };
 
-            let should_prune = status.is_cleanup_complete() || status.is_cleanup_timed_out(timeout);
+            // First, check for decommissioned nodes
+            if !status.pending_nodes().is_empty() {
+                if let Err(e) = self
+                    .mark_decommissioned_nodes(&configmaps, &cm, &status, &existing_nodes)
+                    .await
+                {
+                    warn!(
+                        configmap = %cm_name,
+                        error = %e,
+                        "Failed to mark decommissioned nodes"
+                    );
+                }
+            }
 
-            if should_prune {
-                let reason = if status.is_cleanup_complete() {
-                    "complete"
-                } else {
-                    "timeout"
-                };
+            // Re-fetch to get updated status after potential decommissioning
+            let current_status = match configmaps.get(cm_name).await {
+                Ok(updated_cm) => VolumeStatus::from_configmap(&updated_cm).unwrap_or(status),
+                Err(_) => continue, // ConfigMap may have been deleted
+            };
+
+            // Prune if complete
+            if current_status.is_cleanup_complete() {
+                // Emit event before deleting the ConfigMap
+                emit_event(
+                    &self.client,
+                    &self.namespace,
+                    &current_status.volume_id,
+                    "CleanupComplete",
+                    &format!(
+                        "All cleanup complete. Completed: {:?}, Failed: {:?}, Decommissioned: {:?}",
+                        current_status.nodes_completed,
+                        current_status.nodes_failed,
+                        current_status.nodes_decommissioned
+                    ),
+                    "Normal",
+                )
+                .await;
 
                 match configmaps.delete(cm_name, &Default::default()).await {
                     Ok(_) => {
                         info!(
                             configmap = %cm_name,
-                            volume_id = %status.volume_id,
-                            reason = reason,
-                            nodes_with_volume = ?status.nodes_with_volume,
-                            nodes_completed = ?status.nodes_completed,
-                            nodes_failed = ?status.nodes_failed,
-                            "Pruned cleanup ConfigMap"
+                            volume_id = %current_status.volume_id,
+                            nodes_with_volume = ?current_status.nodes_with_volume,
+                            nodes_completed = ?current_status.nodes_completed,
+                            nodes_failed = ?current_status.nodes_failed,
+                            nodes_decommissioned = ?current_status.nodes_decommissioned,
+                            "Pruned completed cleanup ConfigMap"
                         );
                         pruned += 1;
                     }
@@ -433,17 +672,12 @@ impl CleanupController {
     }
 }
 
-/// Run the controller cleanup pruning loop
-pub async fn run_controller_prune_loop(
-    client: Client,
-    namespace: String,
-    interval: Duration,
-    timeout: Duration,
-) {
+/// Run the controller cleanup processing loop
+/// Checks for decommissioned nodes and prunes completed ConfigMaps
+pub async fn run_controller_cleanup_loop(client: Client, namespace: String, interval: Duration) {
     info!(
         interval_secs = interval.as_secs(),
-        timeout_secs = timeout.as_secs(),
-        "Starting controller cleanup pruner"
+        "Starting controller cleanup processor"
     );
 
     let controller = CleanupController::new(client, namespace);
@@ -451,7 +685,7 @@ pub async fn run_controller_prune_loop(
     loop {
         tokio::time::sleep(interval).await;
 
-        match controller.prune_completed_cleanups(timeout).await {
+        match controller.process_cleanups().await {
             Ok(count) if count > 0 => {
                 info!(count = count, "Pruned cleanup ConfigMaps");
             }
@@ -459,7 +693,7 @@ pub async fn run_controller_prune_loop(
                 debug!("No cleanup ConfigMaps to prune");
             }
             Err(e) => {
-                error!(error = %e, "Error pruning cleanup ConfigMaps");
+                error!(error = %e, "Error processing cleanups");
             }
         }
     }
@@ -486,18 +720,6 @@ impl CleanupNode {
             node_name,
             base_path,
         }
-    }
-
-    pub fn client(&self) -> &Client {
-        &self.client
-    }
-
-    pub fn namespace(&self) -> &str {
-        &self.namespace
-    }
-
-    pub fn node_name(&self) -> &str {
-        &self.node_name
     }
 
     /// Process all pending cleanup requests for this node
@@ -564,8 +786,15 @@ impl CleanupNode {
             };
 
             // Update ConfigMap with completion status
-            if let Err(e) =
-                mark_node_cleanup_complete(&configmaps, &cm_name, &self.node_name, success).await
+            if let Err(e) = mark_node_cleanup_complete(
+                &self.client,
+                &self.namespace,
+                &configmaps,
+                &cm_name,
+                &self.node_name,
+                success,
+            )
+            .await
             {
                 warn!(
                     configmap = %cm_name,
@@ -640,6 +869,7 @@ mod tests {
         status.add_node("node2");
         status.mark_cleanup_requested();
         status.mark_node_completed("node1");
+        status.mark_node_decommissioned("node3");
 
         let data = status.to_configmap_data();
         let json = data.get("status").unwrap();
@@ -648,6 +878,7 @@ mod tests {
         assert_eq!(parsed.volume_id, "nlc-test-123");
         assert_eq!(parsed.nodes_with_volume.len(), 2);
         assert_eq!(parsed.nodes_completed.len(), 1);
+        assert_eq!(parsed.nodes_decommissioned.len(), 1);
         assert!(parsed.cleanup_requested_at.is_some());
     }
 

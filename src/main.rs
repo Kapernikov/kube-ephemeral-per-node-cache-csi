@@ -52,10 +52,6 @@ struct Args {
     /// Disable cleanup service (for testing only - will leak disk space)
     #[arg(long, default_value = "false")]
     no_cleanup_service: bool,
-
-    /// Timeout for cleanup operations in seconds (for dead nodes)
-    #[arg(long, default_value = "3600")]
-    cleanup_timeout_secs: u64,
 }
 
 #[tokio::main]
@@ -117,18 +113,11 @@ async fn run_controller(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
 
         info!(namespace = %args.namespace, "Kubernetes client initialized, cleanup enabled");
 
-        // Start cleanup pruner in background
-        // Check every minute, timeout configurable (default 1 hour)
-        let cleanup_timeout = Duration::from_secs(args.cleanup_timeout_secs);
-        info!(
-            timeout_secs = args.cleanup_timeout_secs,
-            "Cleanup timeout configured"
-        );
-        tokio::spawn(cleanup::run_controller_prune_loop(
+        // Start cleanup processor in background (checks for decommissioned nodes, prunes completed)
+        tokio::spawn(cleanup::run_controller_cleanup_loop(
             client.clone(),
             args.namespace.clone(),
             Duration::from_secs(60), // check interval
-            cleanup_timeout,
         ));
 
         let cleanup_ctrl = cleanup::CleanupController::new(client, args.namespace.clone());
