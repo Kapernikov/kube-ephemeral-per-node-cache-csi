@@ -61,46 +61,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Trust self-signed certificate
-        run: |
-          openssl s_client -connect core.harbor.pp.kapernikov.com:443 -showcerts</dev/null 2>/dev/null|openssl x509 -outform PEM | sudo tee /usr/local/share/ca-certificates/core.harbor.pp.kapernikov.com.crt
-          openssl s_client -connect registry.pp.kapernikov.com:443 -showcerts</dev/null 2>/dev/null|openssl x509 -outform PEM | sudo tee /usr/local/share/ca-certificates/registry.pp.kapernikov.com.crt
-          sudo update-ca-certificates
-
-      - name: Create buildx config file
-        run: |
-          cat << EOF | sudo tee /bconfig.toml
-          [registry."core.harbor.pp.kapernikov.com"]
-            insecure = true
-          [registry."registry.pp.kapernikov.com"]
-            insecure = true
-          EOF
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          driver-opts: |
-            image=core.harbor.pp.kapernikov.com/hub/moby/buildkit:v0.17.0
-            network=host
-          buildkitd-config: /bconfig.toml
-
-      - name: Log in to cache registry
-        uses: docker/login-action@v3
-        with:
-          registry: http://registry.pp.kapernikov.com
-          username: registry
-          password: iebah2Li
 
       - name: Build Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: false
           tags: node-local-cache:test
           build-args: |
             RUST_IMAGE=${{ env.HARBOR_PROXY }}/rust:1.85-alpine
-            ALPINE_IMAGE=${{ env.HARBOR_PROXY }}/alpine:3.20
-          cache-from: type=registry,ref=registry.pp.kapernikov.com/nlc-csi:cache,registry.insecure=true
-          cache-to: type=registry,ref=registry.pp.kapernikov.com/nlc-csi:cache,registry.insecure=true
-        env:
-          DOCKER_BUILD_SUMMARY: "false"

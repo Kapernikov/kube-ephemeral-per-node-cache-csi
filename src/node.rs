@@ -71,7 +71,7 @@ impl Node for NodeService {
         // Construct source path
         let source_path = volume::volume_path(&self.base_path, volume_id);
 
-        // Create source directory if it doesn't exist
+        // Create source directory if it doesn't exist (technically staging, but done here for simplicity)
         if let Err(e) = std::fs::create_dir_all(&source_path) {
             error!(path = %source_path.display(), error = %e, "Failed to create source directory");
             return Err(Status::internal(format!(
@@ -131,7 +131,10 @@ impl Node for NodeService {
             return Err(Status::internal(format!("Failed to bind mount: {}", e)));
         }
 
-        // For readonly, we need to remount with readonly flag
+        // For readonly, we need to remount with readonly flag.
+        // Linux bind mounts ignore MS_RDONLY on initial mount - see mount(2):
+        // "The remaining bits (other than MS_REC) in the mountflags argument are also ignored."
+        // Remount with MS_RDONLY is supported since Linux 2.6.26.
         if readonly {
             let remount_flags = nix::mount::MsFlags::MS_BIND
                 | nix::mount::MsFlags::MS_REMOUNT
@@ -145,6 +148,20 @@ impl Node for NodeService {
                 None::<&str>,
             ) {
                 warn!(error = %e, "Failed to remount readonly, continuing anyway");
+                if let Some(ctx) = &self.cleanup_ctx {
+                    cleanup::emit_event(
+                        &ctx.client,
+                        &ctx.namespace,
+                        volume_id,
+                        "ReadonlyRemountFailed",
+                        &format!(
+                            "Failed to remount volume readonly on node {}: {}",
+                            self.node_name, e
+                        ),
+                        "Warning",
+                    )
+                    .await;
+                }
             }
         }
 
@@ -170,6 +187,18 @@ impl Node for NodeService {
                     error = %e,
                     "Failed to register node for cleanup tracking"
                 );
+                cleanup::emit_event(
+                    &ctx.client,
+                    &ctx.namespace,
+                    volume_id,
+                    "CleanupRegistrationFailed",
+                    &format!(
+                        "Failed to register node {} for cleanup tracking: {}",
+                        self.node_name, e
+                    ),
+                    "Warning",
+                )
+                .await;
             }
 
             // Emit event for visibility

@@ -33,22 +33,14 @@ pub fn volume_path(base: &Path, volume_id: &str) -> PathBuf {
     base.join(volume_id)
 }
 
-/// Check if a path is a mount point by reading /proc/mounts
+/// Check if a path is a mount point using the mountinfo crate
+/// This properly handles edge cases like chroots and mount namespaces
 #[allow(clippy::result_large_err)]
 pub fn is_mounted(path: &Path) -> Result<bool, Status> {
-    let mounts = std::fs::read_to_string("/proc/mounts")
-        .map_err(|e| Status::internal(format!("Failed to read /proc/mounts: {}", e)))?;
+    let mounts = mountinfo::MountInfo::new()
+        .map_err(|e| Status::internal(format!("Failed to read mount info: {}", e)))?;
 
-    let path_str = path.to_string_lossy();
-
-    for line in mounts.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 2 && parts[1] == path_str {
-            return Ok(true);
-        }
-    }
-
-    Ok(false)
+    Ok(mounts.is_mounted(path))
 }
 
 #[cfg(test)]
