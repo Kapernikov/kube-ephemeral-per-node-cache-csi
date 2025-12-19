@@ -192,100 +192,76 @@ pub async fn emit_event(
     }
 }
 
-/// Register that a node has published a volume (call from NodePublishVolume)
-/// Uses optimistic concurrency - retries on conflict
-pub async fn register_node_publish(
+/// Helper for optimistic concurrency updates to volume ConfigMaps.
+/// Handles create-or-update with retry on conflict.
+/// Returns the final VolumeStatus after mutation.
+///
+/// - `create_if_missing`: if true, creates ConfigMap on 404; if false, returns error
+async fn with_volume_configmap<F>(
     client: &Client,
     namespace: &str,
     volume_id: &str,
-    node_name: &str,
-) -> Result<(), kube::Error> {
+    label_value: &str,
+    create_if_missing: bool,
+    mutate: F,
+) -> Result<VolumeStatus, kube::Error>
+where
+    F: Fn(&mut VolumeStatus),
+{
     let configmaps: Api<ConfigMap> = Api::namespaced(client.clone(), namespace);
     let cm_name = configmap_name(volume_id);
 
     for attempt in 0..MAX_RETRIES {
-        // Try to get existing ConfigMap
-        let result = configmaps.get(&cm_name).await;
-
-        match result {
+        let (mut status, resource_version) = match configmaps.get(&cm_name).await {
             Ok(existing) => {
-                // Update existing ConfigMap
-                let resource_version = existing.metadata.resource_version.clone();
-                let mut status = VolumeStatus::from_configmap(&existing)
+                let rv = existing.metadata.resource_version.clone();
+                let status = VolumeStatus::from_configmap(&existing)
                     .unwrap_or_else(|| VolumeStatus::new(volume_id));
-                status.add_node(node_name);
-
-                let patch = ConfigMap {
-                    metadata: kube::api::ObjectMeta {
-                        name: Some(cm_name.clone()),
-                        namespace: Some(namespace.to_string()),
-                        resource_version,
-                        labels: Some(BTreeMap::from([(
-                            VOLUME_LABEL.to_string(),
-                            "active".to_string(),
-                        )])),
-                        ..Default::default()
-                    },
-                    data: Some(status.to_configmap_data()),
-                    ..Default::default()
-                };
-
-                match configmaps
-                    .replace(&cm_name, &PostParams::default(), &patch)
-                    .await
-                {
-                    Ok(_) => {
-                        debug!(
-                            volume_id = %volume_id,
-                            node = %node_name,
-                            "Registered node for volume"
-                        );
-                        return Ok(());
-                    }
-                    Err(kube::Error::Api(ref err)) if err.code == 409 => {
-                        debug!(attempt = attempt, "Conflict updating ConfigMap, retrying");
-                        backoff_sleep(attempt).await;
-                        continue;
-                    }
-                    Err(e) => return Err(e),
-                }
+                (status, rv)
             }
             Err(kube::Error::Api(ref err)) if err.code == 404 => {
-                // Create new ConfigMap
-                let mut status = VolumeStatus::new(volume_id);
-                status.add_node(node_name);
-
-                let cm = ConfigMap {
-                    metadata: kube::api::ObjectMeta {
-                        name: Some(cm_name.clone()),
-                        namespace: Some(namespace.to_string()),
-                        labels: Some(BTreeMap::from([(
-                            VOLUME_LABEL.to_string(),
-                            "active".to_string(),
-                        )])),
-                        ..Default::default()
-                    },
-                    data: Some(status.to_configmap_data()),
-                    ..Default::default()
-                };
-
-                match configmaps.create(&PostParams::default(), &cm).await {
-                    Ok(_) => {
-                        info!(
-                            volume_id = %volume_id,
-                            node = %node_name,
-                            "Created volume tracking ConfigMap"
-                        );
-                        return Ok(());
-                    }
-                    Err(kube::Error::Api(ref err)) if err.code == 409 => {
-                        // Someone else created it, retry to update
-                        debug!("ConfigMap created by another, retrying");
-                        backoff_sleep(attempt).await;
-                        continue;
-                    }
-                    Err(e) => return Err(e),
+                if create_if_missing {
+                    (VolumeStatus::new(volume_id), None)
+                } else {
+                    return Err(kube::Error::Api(err.clone()));
                 }
+            }
+            Err(e) => return Err(e),
+        };
+
+        mutate(&mut status);
+
+        // Check before moving resource_version into struct
+        let is_update = resource_version.is_some();
+
+        let cm = ConfigMap {
+            metadata: kube::api::ObjectMeta {
+                name: Some(cm_name.clone()),
+                namespace: Some(namespace.to_string()),
+                resource_version,
+                labels: Some(BTreeMap::from([(
+                    VOLUME_LABEL.to_string(),
+                    label_value.to_string(),
+                )])),
+                ..Default::default()
+            },
+            data: Some(status.to_configmap_data()),
+            ..Default::default()
+        };
+        let result = if is_update {
+            configmaps
+                .replace(&cm_name, &PostParams::default(), &cm)
+                .await
+        } else {
+            configmaps.create(&PostParams::default(), &cm).await
+        };
+
+        match result {
+            Ok(_) => return Ok(status),
+            Err(kube::Error::Api(ref err)) if err.code == 409 => {
+                debug!(attempt = attempt, "Conflict, retrying with backoff");
+                backoff_sleep(attempt).await;
+                continue;
             }
             Err(e) => return Err(e),
         }
@@ -299,167 +275,100 @@ pub async fn register_node_publish(
     }))
 }
 
+/// Register that a node has published a volume (call from NodePublishVolume)
+pub async fn register_node_publish(
+    client: &Client,
+    namespace: &str,
+    volume_id: &str,
+    node_name: &str,
+) -> Result<(), kube::Error> {
+    let node = node_name.to_string();
+    with_volume_configmap(client, namespace, volume_id, "active", true, |status| {
+        status.add_node(&node);
+    })
+    .await?;
+
+    debug!(volume_id = %volume_id, node = %node_name, "Registered node for volume");
+    Ok(())
+}
+
 /// Mark a volume for cleanup (call from DeleteVolume)
-/// Uses optimistic concurrency - retries on conflict
 pub async fn mark_volume_for_cleanup(
     client: &Client,
     namespace: &str,
     volume_id: &str,
 ) -> Result<(), kube::Error> {
-    let configmaps: Api<ConfigMap> = Api::namespaced(client.clone(), namespace);
-    let cm_name = configmap_name(volume_id);
+    let result = with_volume_configmap(client, namespace, volume_id, "cleanup", false, |status| {
+        status.mark_cleanup_requested();
+    })
+    .await;
 
-    for attempt in 0..MAX_RETRIES {
-        let result = configmaps.get(&cm_name).await;
-
-        match result {
-            Ok(existing) => {
-                let resource_version = existing.metadata.resource_version.clone();
-                let mut status = VolumeStatus::from_configmap(&existing)
-                    .unwrap_or_else(|| VolumeStatus::new(volume_id));
-                status.mark_cleanup_requested();
-
-                let patch = ConfigMap {
-                    metadata: kube::api::ObjectMeta {
-                        name: Some(cm_name.clone()),
-                        namespace: Some(namespace.to_string()),
-                        resource_version,
-                        labels: Some(BTreeMap::from([(
-                            VOLUME_LABEL.to_string(),
-                            "cleanup".to_string(),
-                        )])),
-                        ..Default::default()
-                    },
-                    data: Some(status.to_configmap_data()),
-                    ..Default::default()
-                };
-
-                match configmaps
-                    .replace(&cm_name, &PostParams::default(), &patch)
-                    .await
-                {
-                    Ok(_) => {
-                        info!(
-                            volume_id = %volume_id,
-                            nodes_to_cleanup = status.nodes_with_volume.len(),
-                            "Marked volume for cleanup"
-                        );
-                        emit_event(
-                            client,
-                            namespace,
-                            volume_id,
-                            "CleanupRequested",
-                            &format!(
-                                "Volume cleanup requested, {} node(s) to clean: {:?}",
-                                status.nodes_with_volume.len(),
-                                status.nodes_with_volume
-                            ),
-                            "Normal",
-                        )
-                        .await;
-                        return Ok(());
-                    }
-                    Err(kube::Error::Api(ref err)) if err.code == 409 => {
-                        debug!(attempt = attempt, "Conflict, retrying");
-                        backoff_sleep(attempt).await;
-                        continue;
-                    }
-                    Err(e) => return Err(e),
-                }
-            }
-            Err(kube::Error::Api(ref err)) if err.code == 404 => {
-                // Volume was never published, nothing to clean up
-                debug!(volume_id = %volume_id, "No tracking ConfigMap, nothing to clean");
-                return Ok(());
-            }
-            Err(e) => return Err(e),
+    // If ConfigMap doesn't exist (404), nothing to clean up - that's OK
+    let status = match result {
+        Ok(s) => s,
+        Err(kube::Error::Api(ref err)) if err.code == 404 => {
+            debug!(volume_id = %volume_id, "No tracking ConfigMap, nothing to clean");
+            return Ok(());
         }
-    }
+        Err(e) => return Err(e),
+    };
 
-    Err(kube::Error::Api(kube::core::ErrorResponse {
-        status: "Failure".to_string(),
-        message: "Max retries exceeded".to_string(),
-        reason: "Conflict".to_string(),
-        code: 409,
-    }))
+    info!(
+        volume_id = %volume_id,
+        nodes_to_cleanup = status.nodes_with_volume.len(),
+        "Marked volume for cleanup"
+    );
+    emit_event(
+        client,
+        namespace,
+        volume_id,
+        "CleanupRequested",
+        &format!(
+            "Volume cleanup requested, {} node(s) to clean: {:?}",
+            status.nodes_with_volume.len(),
+            status.nodes_with_volume
+        ),
+        "Normal",
+    )
+    .await;
+
+    Ok(())
 }
 
-/// Mark node cleanup complete with optimistic concurrency
+/// Mark node cleanup complete
 async fn mark_node_cleanup_complete(
     client: &Client,
     namespace: &str,
-    configmaps: &Api<ConfigMap>,
-    cm_name: &str,
+    volume_id: &str,
     node_name: &str,
     success: bool,
 ) -> Result<(), kube::Error> {
-    for attempt in 0..MAX_RETRIES {
-        let existing = configmaps.get(cm_name).await?;
-        let resource_version = existing.metadata.resource_version.clone();
-        let labels = existing.metadata.labels.clone();
-
-        let mut status = match VolumeStatus::from_configmap(&existing) {
-            Some(s) => s,
-            None => {
-                warn!(configmap = %cm_name, "Invalid status in ConfigMap");
-                return Ok(());
-            }
-        };
-
-        let volume_id = status.volume_id.clone();
-
+    let node = node_name.to_string();
+    with_volume_configmap(client, namespace, volume_id, "cleanup", false, |status| {
         if success {
-            status.mark_node_completed(node_name);
+            status.mark_node_completed(&node);
         } else {
-            status.mark_node_failed(node_name);
+            status.mark_node_failed(&node);
         }
+    })
+    .await?;
 
-        let patch = ConfigMap {
-            metadata: kube::api::ObjectMeta {
-                name: Some(cm_name.to_string()),
-                resource_version,
-                labels,
-                ..Default::default()
-            },
-            data: Some(status.to_configmap_data()),
-            ..Default::default()
-        };
+    let (reason, msg, event_type) = if success {
+        (
+            "NodeCleanupComplete",
+            format!("Node {} completed cleanup", node_name),
+            "Normal",
+        )
+    } else {
+        (
+            "NodeCleanupFailed",
+            format!("Node {} failed cleanup", node_name),
+            "Warning",
+        )
+    };
+    emit_event(client, namespace, volume_id, reason, &msg, event_type).await;
 
-        match configmaps
-            .replace(cm_name, &PostParams::default(), &patch)
-            .await
-        {
-            Ok(_) => {
-                let (reason, msg, event_type) = if success {
-                    (
-                        "NodeCleanupComplete",
-                        format!("Node {} completed cleanup", node_name),
-                        "Normal",
-                    )
-                } else {
-                    (
-                        "NodeCleanupFailed",
-                        format!("Node {} failed cleanup", node_name),
-                        "Warning",
-                    )
-                };
-                emit_event(client, namespace, &volume_id, reason, &msg, event_type).await;
-                return Ok(());
-            }
-            Err(kube::Error::Api(ref err)) if err.code == 409 => {
-                debug!(
-                    attempt = attempt,
-                    "Conflict updating cleanup status, retrying"
-                );
-                backoff_sleep(attempt).await;
-                continue;
-            }
-            Err(e) => return Err(e),
-        }
-    }
-
-    warn!(configmap = %cm_name, "Max retries exceeded updating cleanup status");
-    Ok(()) // Don't fail the cleanup for status update issues
+    Ok(())
 }
 
 /// Controller-side cleanup operations
@@ -478,6 +387,19 @@ impl CleanupController {
         mark_volume_for_cleanup(&self.client, &self.namespace, volume_id).await
     }
 
+    /// Emit a Kubernetes event for a volume
+    pub async fn emit_event(&self, volume_id: &str, reason: &str, message: &str, event_type: &str) {
+        emit_event(
+            &self.client,
+            &self.namespace,
+            volume_id,
+            reason,
+            message,
+            event_type,
+        )
+        .await
+    }
+
     /// Get set of node names that exist in the cluster
     async fn get_existing_nodes(&self) -> Result<HashSet<String>, kube::Error> {
         let nodes: Api<Node> = Api::all(self.client.clone());
@@ -490,12 +412,11 @@ impl CleanupController {
         Ok(names)
     }
 
-    /// Check for decommissioned nodes and update ConfigMap
-    /// Returns true if any nodes were marked as decommissioned
+    /// Mark nodes as decommissioned if they no longer exist in the cluster.
+    /// Returns true if any nodes were marked.
     async fn mark_decommissioned_nodes(
         &self,
-        configmaps: &Api<ConfigMap>,
-        cm: &ConfigMap,
+        volume_id: &str,
         status: &VolumeStatus,
         existing_nodes: &HashSet<String>,
     ) -> Result<bool, kube::Error> {
@@ -510,76 +431,40 @@ impl CleanupController {
             return Ok(false);
         }
 
-        let cm_name = match cm.metadata.name.as_ref() {
-            Some(n) => n,
-            None => return Ok(false),
-        };
-
-        // Update with optimistic concurrency
-        for attempt in 0..MAX_RETRIES {
-            let existing = configmaps.get(cm_name).await?;
-            let resource_version = existing.metadata.resource_version.clone();
-            let labels = existing.metadata.labels.clone();
-
-            let mut updated_status = match VolumeStatus::from_configmap(&existing) {
-                Some(s) => s,
-                None => return Ok(false),
-            };
-
-            for node in &decommissioned {
-                updated_status.mark_node_decommissioned(node);
-            }
-
-            let patch = ConfigMap {
-                metadata: kube::api::ObjectMeta {
-                    name: Some(cm_name.to_string()),
-                    resource_version,
-                    labels,
-                    ..Default::default()
-                },
-                data: Some(updated_status.to_configmap_data()),
-                ..Default::default()
-            };
-
-            match configmaps
-                .replace(cm_name, &PostParams::default(), &patch)
-                .await
-            {
-                Ok(_) => {
-                    info!(
-                        configmap = %cm_name,
-                        volume_id = %status.volume_id,
-                        decommissioned_nodes = ?decommissioned,
-                        "Marked nodes as decommissioned (no longer exist in cluster)"
-                    );
-                    emit_event(
-                        &self.client,
-                        &self.namespace,
-                        &status.volume_id,
-                        "NodeDecommissioned",
-                        &format!(
-                            "Node(s) no longer exist in cluster, marked as decommissioned: {:?}",
-                            decommissioned
-                        ),
-                        "Warning",
-                    )
-                    .await;
-                    return Ok(true);
+        let nodes_to_mark = decommissioned.clone();
+        with_volume_configmap(
+            &self.client,
+            &self.namespace,
+            volume_id,
+            "cleanup",
+            false,
+            |s| {
+                for node in &nodes_to_mark {
+                    s.mark_node_decommissioned(node);
                 }
-                Err(kube::Error::Api(ref err)) if err.code == 409 => {
-                    debug!(
-                        attempt = attempt,
-                        "Conflict marking decommissioned, retrying"
-                    );
-                    backoff_sleep(attempt).await;
-                    continue;
-                }
-                Err(e) => return Err(e),
-            }
-        }
+            },
+        )
+        .await?;
 
-        warn!(configmap = %cm_name, "Max retries exceeded marking decommissioned nodes");
-        Ok(false)
+        info!(
+            volume_id = %volume_id,
+            decommissioned_nodes = ?decommissioned,
+            "Marked nodes as decommissioned (no longer exist in cluster)"
+        );
+        emit_event(
+            &self.client,
+            &self.namespace,
+            volume_id,
+            "NodeDecommissioned",
+            &format!(
+                "Node(s) no longer exist in cluster, marked as decommissioned: {:?}",
+                decommissioned
+            ),
+            "Warning",
+        )
+        .await;
+
+        Ok(true)
     }
 
     /// Process cleanup ConfigMaps: mark decommissioned nodes and prune completed ones
@@ -613,11 +498,11 @@ impl CleanupController {
             // First, check for decommissioned nodes
             if !status.pending_nodes().is_empty() {
                 if let Err(e) = self
-                    .mark_decommissioned_nodes(&configmaps, &cm, &status, &existing_nodes)
+                    .mark_decommissioned_nodes(&status.volume_id, &status, &existing_nodes)
                     .await
                 {
                     warn!(
-                        configmap = %cm_name,
+                        volume_id = %status.volume_id,
                         error = %e,
                         "Failed to mark decommissioned nodes"
                     );
@@ -731,11 +616,6 @@ impl CleanupNode {
         let mut processed = 0;
 
         for cm in cms.items {
-            let cm_name = match cm.metadata.name.as_ref() {
-                Some(n) => n.clone(),
-                None => continue,
-            };
-
             let status = match VolumeStatus::from_configmap(&cm) {
                 Some(s) => s,
                 None => continue,
@@ -789,15 +669,15 @@ impl CleanupNode {
             if let Err(e) = mark_node_cleanup_complete(
                 &self.client,
                 &self.namespace,
-                &configmaps,
-                &cm_name,
+                &status.volume_id,
                 &self.node_name,
                 success,
             )
             .await
             {
+                // Don't fail cleanup for status update issues
                 warn!(
-                    configmap = %cm_name,
+                    volume_id = %status.volume_id,
                     error = %e,
                     "Failed to update cleanup status"
                 );
@@ -827,7 +707,7 @@ impl CleanupNode {
         let path = path.to_path_buf();
         tokio::task::spawn_blocking(move || std::fs::remove_dir_all(path))
             .await
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))??;
+            .map_err(std::io::Error::other)??;
 
         Ok(true)
     }

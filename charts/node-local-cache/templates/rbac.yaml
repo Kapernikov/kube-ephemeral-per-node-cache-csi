@@ -74,10 +74,10 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get"]
-  # For cleanup watching
+  # For cleanup polling (we poll, not watch)
   - apiGroups: [""]
     resources: ["configmaps"]
-    verbs: ["get", "list", "watch", "update", "patch"]
+    verbs: ["get", "list", "update", "patch"]
   # For emitting events
   - apiGroups: [""]
     resources: ["events"]

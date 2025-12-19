@@ -83,6 +83,14 @@ impl Controller for ControllerService {
                     error = %e,
                     "Failed to create cleanup request, continuing anyway"
                 );
+                cleanup
+                    .emit_event(
+                        &req.volume_id,
+                        "CleanupRequestFailed",
+                        &format!("Failed to create cleanup request: {}", e),
+                        "Warning",
+                    )
+                    .await;
             }
         }
 
