@@ -33,14 +33,31 @@ pub fn volume_path(base: &Path, volume_id: &str) -> PathBuf {
     base.join(volume_id)
 }
 
-/// Check if a path is a mount point using the mountinfo crate
-/// This properly handles edge cases like chroots and mount namespaces
+/// Check if a path is a mount point by reading /proc/mounts
+/// Uses proc-mounts crate which handles the simpler /proc/mounts format
+/// (more robust than /proc/self/mountinfo parsing in complex container environments)
 #[allow(clippy::result_large_err)]
 pub fn is_mounted(path: &Path) -> Result<bool, Status> {
-    let mounts = mountinfo::MountInfo::new()
-        .map_err(|e| Status::internal(format!("Failed to read mount info: {}", e)))?;
+    use proc_mounts::MountIter;
 
-    Ok(mounts.is_mounted(path))
+    let mounts = MountIter::new()
+        .map_err(|e| Status::internal(format!("Failed to read /proc/mounts: {}", e)))?;
+
+    for mount in mounts {
+        match mount {
+            Ok(info) => {
+                if info.dest == path {
+                    return Ok(true);
+                }
+            }
+            Err(e) => {
+                // Log but continue - one bad line shouldn't fail the whole check
+                tracing::warn!("Failed to parse mount entry: {}", e);
+            }
+        }
+    }
+
+    Ok(false)
 }
 
 #[cfg(test)]
@@ -92,5 +109,51 @@ mod tests {
             path,
             PathBuf::from("/var/node-local-cache/nlc-550e8400-e29b-41d4-a716-446655440000")
         );
+    }
+
+    #[test]
+    fn test_parse_k3s_mounts() {
+        // Test that proc-mounts can parse a synthetic k3s /proc/mounts file
+        // This file contains complex overlay mounts with very long options,
+        // similar to what's seen in real k3s environments
+        use proc_mounts::MountIter;
+
+        let mounts_path = Path::new("testdata/k3s-mounts.txt");
+        if !mounts_path.exists() {
+            // Skip test if file not present (CI environment)
+            return;
+        }
+
+        let mounts =
+            MountIter::new_from_file(mounts_path).expect("Should be able to open k3s mounts file");
+
+        let mut count = 0;
+        let mut errors = 0;
+        for mount in mounts {
+            match mount {
+                Ok(_) => count += 1,
+                Err(e) => {
+                    eprintln!("Parse error: {}", e);
+                    errors += 1;
+                }
+            }
+        }
+
+        // Synthetic file has ~30 entries (plus comment lines which are skipped)
+        assert!(count >= 25, "Expected >=25 mounts, got {}", count);
+        // Should have zero parse errors
+        assert_eq!(errors, 0, "Got parse errors: {}", errors);
+
+        // Verify we can find specific known paths
+        let mounts = MountIter::new_from_file(mounts_path).unwrap();
+        let paths: Vec<PathBuf> = mounts.filter_map(|m| m.ok()).map(|m| m.dest).collect();
+
+        // These paths should exist in the test file
+        assert!(paths.contains(&PathBuf::from("/proc")));
+        assert!(paths.contains(&PathBuf::from("/sys")));
+        // Verify complex overlay paths are parsed
+        assert!(paths
+            .iter()
+            .any(|p| p.to_string_lossy().contains("containerd")));
     }
 }

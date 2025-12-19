@@ -1,0 +1,31 @@
+overlay / overlay rw,relatime,lowerdir=/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1/fs,upperdir=/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/2/fs,workdir=/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/2/work 0 0
+proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0
+tmpfs /dev tmpfs rw,nosuid,size=65536k,mode=755,inode64 0 0
+devpts /dev/pts devpts rw,nosuid,noexec,relatime,gid=5,mode=620,ptmxmode=666 0 0
+mqueue /dev/mqueue mqueue rw,nosuid,nodev,noexec,relatime 0 0
+sysfs /sys sysfs ro,nosuid,nodev,noexec,relatime 0 0
+cgroup /sys/fs/cgroup cgroup2 ro,nosuid,nodev,noexec,relatime 0 0
+/dev/mapper/ubuntu--vg-ubuntu--lv /host ext4 rw,relatime 0 0
+udev /host/dev devtmpfs rw,nosuid,relatime,size=65798032k,nr_inodes=16449508,mode=755,inode64 0 0
+devpts /host/dev/pts devpts rw,nosuid,noexec,relatime,gid=5,mode=620,ptmxmode=000 0 0
+tmpfs /host/dev/shm tmpfs rw,nosuid,nodev,inode64 0 0
+hugetlbfs /host/dev/hugepages hugetlbfs rw,relatime,pagesize=2M 0 0
+mqueue /host/dev/mqueue mqueue rw,nosuid,nodev,noexec,relatime 0 0
+tmpfs /host/run tmpfs rw,nosuid,nodev,noexec,relatime,size=13179648k,mode=755,inode64 0 0
+tmpfs /host/run/lock tmpfs rw,nosuid,nodev,noexec,relatime,size=5120k,inode64 0 0
+none /host/run/credentials/systemd-sysusers.service ramfs ro,nosuid,nodev,noexec,relatime,mode=700 0 0
+sunrpc /host/run/rpc_pipefs rpc_pipefs rw,relatime 0 0
+tmpfs /host/run/snapd/ns tmpfs rw,nosuid,nodev,noexec,relatime,size=13179648k,mode=755,inode64 0 0
+shm /host/run/k3s/containerd/io.containerd.grpc.v1.cri/sandboxes/aaa111bbb222ccc333/shm tmpfs rw,nosuid,nodev,noexec,relatime,size=65536k,inode64 0 0
+nsfs /host/run/netns/cni-aaaa1111-2222-3333-4444-555566667777 nsfs rw 0 0
+overlay /host/run/k3s/containerd/io.containerd.runtime.v2.task/k8s.io/aaa111bbb222/rootfs overlay rw,relatime,lowerdir=/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1/fs,upperdir=/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/100/fs,workdir=/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/100/work 0 0
+overlay /host/run/k3s/containerd/io.containerd.runtime.v2.task/k8s.io/bbb222ccc333/rootfs overlay rw,relatime,lowerdir=/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/13/fs:/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/12/fs:/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/11/fs:/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/10/fs:/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/9/fs:/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/8/fs:/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/7/fs:/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/6/fs:/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/5/fs:/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/4/fs:/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/3/fs:/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/2/fs:/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1/fs,upperdir=/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/101/fs,workdir=/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/101/work 0 0
+shm /host/run/k3s/containerd/io.containerd.grpc.v1.cri/sandboxes/ccc333ddd444/shm tmpfs rw,nosuid,nodev,noexec,relatime,size=65536k,inode64 0 0
+nsfs /host/run/netns/cni-bbbb2222-3333-4444-5555-666677778888 nsfs rw 0 0
+overlay /host/run/k3s/containerd/io.containerd.runtime.v2.task/k8s.io/ccc333ddd444/rootfs overlay rw,relatime,lowerdir=/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1/fs,upperdir=/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/102/fs,workdir=/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/102/work 0 0
+overlay /host/run/k3s/containerd/io.containerd.runtime.v2.task/k8s.io/ddd444eee555/rootfs overlay rw,relatime,lowerdir=/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/3/fs:/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/2/fs:/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1/fs,upperdir=/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/103/fs,workdir=/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/103/work 0 0
+tmpfs /var/lib/kubelet/pods/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/volumes/kubernetes.io~projected/kube-api-access-xxxxx rw,relatime,size=1048576k,inode64 0 0
+tmpfs /var/lib/kubelet/pods/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/volumes/kubernetes.io~empty-dir/cache rw,relatime,size=131796472k,inode64 0 0
+tmpfs /var/lib/kubelet/pods/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/volumes/kubernetes.io~downward-api/podinfo rw,relatime,size=131796472k,inode64 0 0
+192.168.1.100:/volume1/data /var/lib/kubelet/pods/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/volumes/kubernetes.io~nfs/pvc-ffffffff-1111-2222-3333-444444444444 nfs4 rw,vers=4.1,rsize=131072,wsize=131072,namlen=255,hard,proto=tcp,timeo=600,retrans=2,sec=sys,local_lock=none 0 0
+/dev/mapper/ubuntu--vg-ubuntu--lv /var/lib/kubelet/pods/bbbbbbbb-cccc-dddd-eeee-ffffffffffff/volume-subpaths/config/app/1 ext4 rw,relatime 0 0
