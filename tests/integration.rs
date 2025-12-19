@@ -41,7 +41,8 @@ impl TestServer {
             .arg("--csi-socket")
             .arg(&socket)
             .arg("--log-level")
-            .arg("warn");
+            .arg("warn")
+            .arg("--no-cleanup-service"); // Don't try to connect to K8s API in tests
 
         if mode == "node" {
             cmd.arg("--node-name").arg("test-node");
