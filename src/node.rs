@@ -171,6 +171,21 @@ impl Node for NodeService {
                     "Failed to register node for cleanup tracking"
                 );
             }
+
+            // Emit event for visibility
+            cleanup::emit_event(
+                &ctx.client,
+                &ctx.namespace,
+                volume_id,
+                "VolumePublished",
+                &format!(
+                    "Volume mounted on node {} at {}",
+                    self.node_name,
+                    target_path.display()
+                ),
+                "Normal",
+            )
+            .await;
         }
 
         Ok(Response::new(NodePublishVolumeResponse {}))
