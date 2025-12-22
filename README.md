@@ -122,7 +122,8 @@ resource "kubernetes_persistent_volume_claim" "docker_cache" {
 
 ## Status
 
-Not recommended for production use yet. We will update this document as it matures.
+This storage provisioner has only seen very limited production use, so use at your own risk. 
+That being said, it should never ever be used for persistent storage (that's not what it made for), so the risks are limited. The implementation is also quite simple and straightforward.
 
 
 ## License
