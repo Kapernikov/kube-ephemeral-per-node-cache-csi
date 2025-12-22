@@ -73,7 +73,7 @@ Then, you can deploy a k8s agent on a specific queue using this PVC as a cache v
 
 ## Coder (template) example
 
-The docker example is useful for systems like coder, github actions, ...
+This provisioner is suited for using as a docker cache for instance for coder workspaces or github actions, where the stored docker images and layers can be rematerialized if needed (for instance when using devcontainers)
 
 ```terraform
 
