@@ -9,7 +9,7 @@ license = "Apache-2.0"
 # gRPC + protobuf
 tonic = "0.12"
 prost = "0.13"
-prost-types = "0.13"
+prost-types = "0.14"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
