@@ -7,7 +7,7 @@ license = "Apache-2.0"
 
 [dependencies]
 # gRPC + protobuf
-tonic = "0.12"
+tonic = "0.14"
 prost = "0.13"
 prost-types = "0.13"
 
